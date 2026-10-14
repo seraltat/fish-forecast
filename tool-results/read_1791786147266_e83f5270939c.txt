@@ -1,0 +1,720 @@
+     1→// Bite forecast algorithm — pure functions used by API routes & client.
+     2→// All text in Russian where appropriate.
+     3→
+     4→import type { Species } from "./species";
+     5→
+     6→export type FishWeights = {
+     7→  waterTemp?: number;
+     8→  pressureTrend?: number;
+     9→  pressureValue?: number;
+    10→  windSpeed?: number;
+    11→  windDirection?: number;
+    12→  timeOfDay?: number;
+    13→  moonPhase?: number;
+    14→  cloudCover?: number;
+    15→};
+    16→
+    17→// ----------------- Piecewise-linear interpolation -----------------
+    18→
+    19→// points sorted ascending by [0]; linear interp between; clamp ends.
+    20→export function piecewiseLinear(points: Array<[number, number]>, x: number): number {
+    21→  if (points.length === 0) return 0;
+    22→  if (x <= points[0][0]) return points[0][1];
+    23→  const last = points[points.length - 1];
+    24→  if (x >= last[0]) return last[1];
+    25→  for (let i = 0; i < points.length - 1; i++) {
+    26→    const [x0, y0] = points[i];
+    27→    const [x1, y1] = points[i + 1];
+    28→    if (x >= x0 && x <= x1) {
+    29→      const t = (x - x0) / (x1 - x0);
+    30→      return Math.round(y0 + t * (y1 - y0));
+    31→    }
+    32→  }
+    33→  return last[1];
+    34→}
+    35→
+    36→// ----------------- Moon phase -----------------
+    37→
+    38→// Reference new moon (lunar epoch): 2000-01-06 18:14 UTC
+    39→const LUNAR_EPOCH_MS = Date.UTC(2000, 0, 6, 18, 14, 0);
+    40→const SYNODIC_MONTH = 29.53058867;
+    41→
+    42→export function moonPhase(date: Date): { age: number; phase: number; label: string } {
+    43→  const ms = date.getTime() - LUNAR_EPOCH_MS;
+    44→  const day = ms / (1000 * 60 * 60 * 24);
+    45→  const age = ((day % SYNODIC_MONTH) + SYNODIC_MONTH) % SYNODIC_MONTH;
+    46→  const phase = age / SYNODIC_MONTH; // 0..1
+    47→  return { age, phase, label: moonPhaseLabel(phase) };
+    48→}
+    49→
+    50→export function moonPhaseLabel(phase: number): string {
+    51→  // Phase 0..1
+    52→  const buckets = [
+    53→    { max: 0.03, label: "Новолуние" },
+    54→    { max: 0.22, label: "Растущая" },
+    55→    { max: 0.28, label: "Первая четверть" },
+    56→    { max: 0.47, label: "Растущая" },
+    57→    { max: 0.53, label: "Полнолуние" },
+    58→    { max: 0.72, label: "Убывающая" },
+    59→    { max: 0.78, label: "Последняя четверть" },
+    60→    { max: 0.97, label: "Убывающая" },
+    61→    { max: 1.01, label: "Новолуние" },
+    62→  ];
+    63→  for (const b of buckets) {
+    64→    if (phase <= b.max) return b.label;
+    65→  }
+    66→  return "Новолуние";
+    67→}
+    68→
+    69→// Moon emoji (unicode) — works on Android.
+    70→export function moonPhaseEmoji(phase: number): string {
+    71→  // 0=new moon, 0.5=full moon
+    72→  const emojis = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"];
+    73→  const idx = Math.round((phase % 1) * 8) % 8;
+    74→  return emojis[idx];
+    75→}
+    76→
+    77→// ----------------- Compass / wind -----------------
+    78→
+    79→export const COMPASS_8_RU: { short: string; full: string; deg: number }[] = [
+    80→  { short: "С", full: "Север", deg: 0 },
+    81→  { short: "СВ", full: "Северо-восток", deg: 45 },
+    82→  { short: "В", full: "Восток", deg: 90 },
+    83→  { short: "ЮВ", full: "Юго-восток", deg: 135 },
+    84→  { short: "Ю", full: "Юг", deg: 180 },
+    85→  { short: "ЮЗ", full: "Юго-запад", deg: 225 },
+    86→  { short: "З", full: "Запад", deg: 270 },
+    87→  { short: "СЗ", full: "Северо-запад", deg: 315 },
+    88→];
+    89→
+    90→export function windDirLabel(deg: number | null | undefined): string | null {
+    91→  if (deg == null || Number.isNaN(deg)) return null;
+    92→  const normalized = ((deg % 360) + 360) % 360;
+    93→  const idx = Math.round(normalized / 45) % 8;
+    94→  return COMPASS_8_RU[idx].short;
+    95→}
+    96→
+    97→export function windDirFullLabel(deg: number | null | undefined): string | null {
+    98→  if (deg == null || Number.isNaN(deg)) return null;
+    99→  const normalized = ((deg % 360) + 360) % 360;
+   100→  const idx = Math.round(normalized / 45) % 8;
+   101→  return COMPASS_8_RU[idx].full;
+   102→}
+   103→
+   104→// ----------------- Pressure trend -----------------
+   105→
+   106→export type PressureTrend = "drop_sharp" | "drop" | "stable" | "rise" | "rise_sharp";
+   107→
+   108→// Thresholds based on user's research (image 1):
+   109→//   Резкий скачок = падение ≥ 5–8 mmHg/сутки → ~0.6–1 mmHg/3ч
+   110→//   Плавное падение = 2–3 mmHg/сутки → ~0.25–0.4 mmHg/3ч
+   111→// Thresholds (per 3-hour window):
+   112→//   < -1 mmHg/3ч           → Резко падает
+   113→//   -1 .. -0.3 mmHg/3ч     → Падает (плавное)
+   114→//   -0.3 .. +0.3 mmHg/3ч   → Стабильно
+   115→//   +0.3 .. +1 mmHg/3ч     → Растёт (плавное)
+   116→//   > +1 mmHg/3ч           → Резко растёт
+   117→export function pressureTrend(deltaMmHg: number): { trend: PressureTrend; label: string } {
+   118→  if (deltaMmHg < -1) return { trend: "drop_sharp", label: "Резко падает" };
+   119→  if (deltaMmHg < -0.3) return { trend: "drop", label: "Падает" };
+   120→  if (deltaMmHg <= 0.3) return { trend: "stable", label: "Стабильно" };
+   121→  if (deltaMmHg <= 1) return { trend: "rise", label: "Растёт" };
+   122→  return { trend: "rise_sharp", label: "Резко растёт" };
+   123→}
+   124→
+   125→// hPa → mmHg
+   126→export const HPA_TO_MMHG = 0.750062;
+   127→
+   128→// ----------------- Weather code → Russian label -----------------
+   129→
+   130→export function weatherCodeLabel(code: number): string {
+   131→  const map: Record<number, string> = {
+   132→    0: "Ясно",
+   133→    1: "Переменная облачность",
+   134→    2: "Переменная облачность",
+   135→    3: "Переменная облачность",
+   136→    45: "Туман",
+   137→    48: "Изморозь",
+   138→    51: "Морось",
+   139→    53: "Морось",
+   140→    55: "Морось",
+   141→    56: "Ледяной дождь",
+   142→    57: "Ледяной дождь",
+   143→    61: "Дождь",
+   144→    63: "Дождь",
+   145→    65: "Сильный дождь",
+   146→    66: "Ледяной дождь",
+   147→    67: "Ледяной дождь",
+   148→    71: "Снег",
+   149→    73: "Снег",
+   150→    75: "Сильный снег",
+   151→    77: "Снежные зёрна",
+   152→    80: "Ливень",
+   153→    81: "Ливень",
+   154→    82: "Сильный ливень",
+   155→    85: "Снегопад",
+   156→    86: "Снегопад",
+   157→    95: "Гроза",
+   158→    96: "Гроза с градом",
+   159→    99: "Гроза с градом",
+   160→  };
+   161→  return map[code] ?? "—";
+   162→}
+   163→
+   164→// ----------------- Water-temperature curves (per-species) -----------------
+   165→// Detailed piecewise-linear curves researched by user — see worklog Task 4.
+   166→// x = waterTemp °C, y = score 0..100.
+   167→
+   168→const WATER_TEMP_CURVES: Record<Species, Array<[number, number]>> = {
+   169→  // Карась — peak 14-16°C (pre-spawning feast), drop 18-20 (spawning), recovery 22-25, decline >25.
+   170→  карась: [
+   171→    [-10, 5], [4, 5], [6, 20], [8, 35], [10, 55], [12, 75], [14, 95], [15, 100],
+   172→    [16, 95], [17, 80], [18, 45], [19, 30], [20, 35], [21, 55], [22, 70], [23, 75],
+   173→    [24, 70], [25, 60], [26, 50], [28, 30], [32, 15],
+   174→  ],
+   175→  // Сазан — pre-spawn peak 15-18, spawning dip 18-22, post-spawn peak 22-26, decline >28.
+   176→  сазан: [
+   177→    [-5, 0], [5, 5], [8, 25], [10, 45], [12, 65], [14, 75], [15, 80], [17, 88],
+   178→    [18, 75], [20, 60], [22, 75], [24, 95], [26, 100], [28, 90], [30, 70], [33, 40],
+   179→  ],
+   180→  // Сом — very low <10, spring feast 14-17, spawning dip 18-22, post-spawn peak 25-28, decline >30.
+   181→  сом: [
+   182→    [-5, 0], [4, 0], [6, 10], [8, 20], [10, 35], [12, 50], [14, 70], [15, 80],
+   183→    [17, 90], [18, 80], [20, 55], [22, 70], [24, 90], [26, 100], [28, 95], [30, 75],
+   184→    [33, 50],
+   185→  ],
+   186→  // Щука — peak 10-12, good 8-15, decline 18-22, very low >22, metabolism stops below 3°C.
+   187→  щука: [
+   188→    [-1, 5], [0, 15], [2, 25], [4, 50], [6, 65], [8, 80], [10, 95], [11, 100],
+   189→    [12, 95], [14, 85], [16, 75], [18, 55], [20, 40], [22, 25], [25, 15], [30, 5],
+   190→  ],
+   191→};
+   192→
+   193→// ----------------- Pressure trend scores (per-species) -----------------
+   194→// Table-driven per spec. Values 0..100.
+   195→
+   196→// Based on user's image 2 (по видам рыб: тренд давления → клёв) and image 1:
+   197→//   Карась: Стабильно=Хорошо, Плавное падение=Среднее, Резкий скачок=Привередлив
+   198→//   Сазан: Стабильно=Среднее, Плавное падение=Хорошо, Резкий скачок=Привередлив
+   199→//   Сом:   Стабильно=Хорошо (тёплыми ночами), Плавное падение=Хорошо, Резкий скачок=Слабо
+   200→//   Щука:  Стабильно=Хорошо, Плавное падение=Хорошо, Резкий скачок=Слабо
+   201→// Оценки 0..100:
+   202→//   Отлично=90-100, Хорошо=70-85, Среднее=50-65, Слабо=30-45, Привередлив/Плохо=20-30
+   203→const PRESSURE_TREND_SCORES: Record<Species, Record<PressureTrend, number>> = {
+   204→  // Карась: prefers stable pressure.
+   205→  карась: {
+   206→    drop_sharp: 30,   // привередлив
+   207→    drop: 60,         // среднее
+   208→    stable: 90,       // хорошо
+   209→    rise: 70,         // хорошо (растущее приемлемо)
+   210→    rise_sharp: 25,   // привередлив
+   211→  },
+   212→  // Сазан: плавное падение ЛУЧШЕ стабильного (по данным фото 2).
+   213→  сазан: {
+   214→    drop_sharp: 30,   // привередлив
+   215→    drop: 85,         // хорошо
+   216→    stable: 65,       // среднее
+   217→    rise: 75,         // хорошо
+   218→    rise_sharp: 30,   // привередлив
+   219→  },
+   220→  // Сом: и стабильное, и плавное падение — хорошо.
+   221→  сом: {
+   222→    drop_sharp: 35,   // слабо
+   223→    drop: 80,         // хорошо
+   224→    stable: 85,       // хорошо (тёплыми ночами)
+   225→    rise: 60,         // среднее
+   226→    rise_sharp: 40,   // слабо
+   227→  },
+   228→  // Щука: и стабильное, и плавное падение — хорошо; резкий скачок — слабо.
+   229→  // (по данным фото 2: «Стабильно=Хорошо, Плавное падение=Хорошо, Резкий скачок=Слабо»)
+   230→  щука: {
+   231→    drop_sharp: 35,   // слабо
+   232→    drop: 85,         // хорошо
+   233→    stable: 85,       // хорошо
+   234→    rise: 60,         // среднее
+   235→    rise_sharp: 30,   // слабо
+   236→  },
+   237→};
+   238→
+   239→// ----------------- Scoring helpers -----------------
+   240→
+   241→// Bell-shaped sub-score kept for backward compat (still used in some tests).
+   242→export function bellScore(value: number, peak: number, lo: number, hi: number): number {
+   243→  if (value < lo || value > hi) {
+   244→    return Math.max(0, 100 - Math.abs(value - peak) * 8);
+   245→  }
+   246→  const half = Math.max((hi - lo) / 2, 0.001);
+   247→  const d = Math.abs(value - peak) / half;
+   248→  return Math.round(100 - 25 * d * d);
+   249→}
+   250→
+   251→// Water-temperature sub-score per species — uses detailed piecewise curve.
+   252→export function waterTempScore(species: Species, waterTemp: number): number {
+   253→  return piecewiseLinear(WATER_TEMP_CURVES[species], waterTemp);
+   254→}
+   255→
+   256→// Pressure trend sub-score (table-driven).
+   257→export function pressureTrendScore(trend: PressureTrend, species: Species): number {
+   258→  return PRESSURE_TREND_SCORES[species][trend];
+   259→}
+   260→
+   261→// Pressure value sub-score (absolute range) — based on user's image 1:
+   262→//   745-765 (стабильно нормальное) → Уверенный, стабильный → 90
+   263→//   720-745 (стабильно низкое)     → Уверенный, рыбы идут на глубину → 75
+   264→//   765-780 (стабильно высокое)    → Слабый днём, лучше на заре → 50
+   265→//   700-720 / 780-800 (крайние)    → 35
+   266→//   <700 / >800 (экстремальные)    → 20
+   267→// Note: trend (стабильно/падает/растёт) учитывается отдельной функцией pressureTrendScore.
+   268→export function pressureValueScore(pressureMmHg: number): number {
+   269→  if (pressureMmHg >= 745 && pressureMmHg <= 765) return 90;
+   270→  if (pressureMmHg >= 720 && pressureMmHg < 745) return 75;
+   271→  if (pressureMmHg > 765 && pressureMmHg <= 780) return 50;
+   272→  if ((pressureMmHg >= 700 && pressureMmHg < 720) || (pressureMmHg > 780 && pressureMmHg <= 800)) return 35;
+   273→  return 20;
+   274→}
+   275→
+   276→// Time-of-day sub-score for dawn/dusk preference.
+   277→export function timeOfDayScore(minutesFromSunEvent: number): number {
+   278→  const sigma = 60;
+   279→  const v = 100 * Math.exp(-(minutesFromSunEvent * minutesFromSunEvent) / (sigma * sigma));
+   280→  return Math.round(v);
+   281→}
+   282→
+   283→// Wind direction sub-score — piecewise by 8-point compass.
+   284→// По правилу пользователя: «южный, западный клев нормальный; северный, восточный — не очень».
+   285→// Используем 8-румбовый компас с явной оценкой для каждого направления:
+   286→//   С  (N,   0°)   → 25  — холодный, не очень
+   287→//   СВ (NE, 45°)  → 30  — холодный с востоком, не очень
+   288→//   В  (E,  90°)  → 35  — восточный, не очень
+   289→//   ЮВ (SE, 135°) → 75  — тёплый с востоком, хорошо
+   290→//   Ю  (S, 180°)  → 90  — тёплый, хороший
+   291→//   ЮЗ (SW, 225°) → 100 — лучший: тёплый, нагоняет корм в берег
+   292→//   З  (W, 270°)  → 90  — хороший
+   293→//   СЗ (NW, 315°) → 65  — западный с холодным севером, средне
+   294→const WIND_DIR_SCORES_8PT: Array<{ short: string; score: number; deg: number }> = [
+   295→  { short: "С", score: 25, deg: 0 },
+   296→  { short: "СВ", score: 30, deg: 45 },
+   297→  { short: "В", score: 35, deg: 90 },
+   298→  { short: "ЮВ", score: 75, deg: 135 },
+   299→  { short: "Ю", score: 90, deg: 180 },
+   300→  { short: "ЮЗ", score: 100, deg: 225 },
+   301→  { short: "З", score: 90, deg: 270 },
+   302→  { short: "СЗ", score: 65, deg: 315 },
+   303→];
+   304→
+   305→export function windDirScore(deg: number | null | undefined, _bestDirs?: number[]): number {
+   306→  if (deg == null || Number.isNaN(deg)) return 50;
+   307→  const norm = ((deg % 360) + 360) % 360;
+   308→  // Find closest 8-point compass direction
+   309→  let closest = WIND_DIR_SCORES_8PT[0];
+   310→  let bestDiff = 360;
+   311→  for (const dir of WIND_DIR_SCORES_8PT) {
+   312→    const diff = Math.min(Math.abs(norm - dir.deg), 360 - Math.abs(norm - dir.deg));
+   313→    if (diff < bestDiff) {
+   314→      bestDiff = diff;
+   315→      closest = dir;
+   316→    }
+   317→  }
+   318→  // If exactly on the compass point, return its score.
+   319→  // If between two points, interpolate linearly between their scores.
+   320→  if (bestDiff === 0) return closest.score;
+   321→  // Find the next compass point clockwise
+   322→  const idx = WIND_DIR_SCORES_8PT.indexOf(closest);
+   323→  const next = WIND_DIR_SCORES_8PT[(idx + 1) % 8];
+   324→  const nextDeg = next.deg < closest.deg ? next.deg + 360 : next.deg;
+   325→  const segmentSize = nextDeg - closest.deg;
+   326→  const t = bestDiff / segmentSize;
+   327→  return Math.round(closest.score + t * (next.score - closest.score));
+   328→}
+   329→
+   330→// Bite score → label + color (used by FishChips, ScoreGauge, ForecastTab).
+   331→// Шкала по запросу пользователя:
+   332→//   0-10   → "Клёва нет"   (тёмно-красный)
+   333→//   11-30  → "Слабый"      (красный)
+   334→//   31-60  → "Средний"     (оранжевый)
+   335→//   61-80  → "Хороший"     (зелёный)
+   336→//   81-100 → "Отличный"    (тёмно-зелёный)
+   337→export function biteLabel(score: number): string {
+   338→  if (score >= 81) return "Отличный";
+   339→  if (score >= 61) return "Хороший";
+   340→  if (score >= 31) return "Средний";
+   341→  if (score >= 11) return "Слабый";
+   342→  return "Клёва нет";
+   343→}
+   344→
+   345→export function biteColor(score: number): string {
+   346→  if (score >= 81) return "#1a4d2e"; // отличнo — тёмно-зелёный
+   347→  if (score >= 61) return "#2d5a3d";  // хороший — зелёный
+   348→  if (score >= 31) return "#d97706";  // средний — оранжевый
+   349→  if (score >= 11) return "#dc2626";  // слабый — красный
+   350→  return "#7f1d1d";                   // клёва нет — тёмно-красный
+   351→}
+   352→
+   353→// Lunar day number (1..30) from moon phase (0..1).
+   354→// Used for UI display — to show user which lunar day the algorithm is using.
+   355→// age = phase * 29.53 (days since new moon, 0-indexed).
+   356→// lunar day = floor(age) + 1 (1-indexed, day 1 = new moon).
+   357→export function lunarDayFromPhase(phase: number): number {
+   358→  const age = phase * SYNODIC_MONTH;
+   359→  return Math.floor(age) + 1;
+   360→}
+   361→
+   362→// Moon phase sub-score — based on user's research (28-day lunar cycle table).
+   363→// Convention: lunarDay = floor(moon age in days) — matches what's shown on popular sites
+   364→// (Yandex Weather, Meteocast, Voshod-Solnca). Day 0 = day of new moon, day 1 = 1 day after, etc.
+   365→//
+   366→// Table (per user's research, shifted to Convention B):
+   367→//   День 0-2 (новолуние ±): плохой → 25
+   368→//   День 3: хороший → 70
+   369→//   День 4-8 (первая четверть, растущая): отличный → 90
+   370→//   День 9-10: хороший → 70
+   371→//   День 11-12 (растущая, близко к полнолунию): слабый → 45
+   372→//   День 13-16 (полнолуние ±): плохой → 25
+   373→//   День 17 (сразу после полнолуния): слабый → 45
+   374→//   День 18-19: отличный → 90
+   375→//   День 20-22 (третья четверть): хороший → 70
+   376→//   День 23-26 (убывающая): слабый → 45
+   377→//   День 27+ (близко к новолунию): плохой → 25
+   378→// Принимает ЛУННЫЙ ДЕНЬ (0..30) от computeUserLunarDay.
+   379→export function moonPhaseScore(lunarDay: number): number {
+   380→  const day = Math.max(0, Math.min(30, Math.floor(lunarDay)));
+   381→  if (day <= 2) return 25;                       // плохой (новолуние ±)
+   382→  if (day === 3) return 70;                     // хороший
+   383→  if (day >= 4 && day <= 8) return 90;            // отличный
+   384→  if (day === 9 || day === 10) return 70;         // хороший
+   385→  if (day === 11 || day === 12) return 45;        // слабый
+   386→  if (day >= 13 && day <= 16) return 25;          // плохой (полнолуние)
+   387→  if (day === 17) return 45;                    // слабый
+   388→  if (day === 18 || day === 19) return 90;      // отличный
+   389→  if (day >= 20 && day <= 22) return 70;        // хороший
+   390→  if (day >= 23 && day <= 26) return 45;        // слабый
+   391→  if (day >= 27) return 25;                    // плохой (близко к новолунию)
+   392→  return 50; // fallback
+   393→}
+   394→
+   395→// Compute lunar day using the standard astronomical convention:
+   396→//   lunarDay = floor(moon age in days)
+   397→// where moon age = phase × SYNODIC_MONTH, and phase is the Open-Meteo value
+   398→// (sampled at noon local for each day).
+   399→//
+   400→// This matches what's shown on popular sites (Yandex Weather, Meteocast, Voshod-Solnca):
+   401→//   - On the day of new moon, age ≈ 0 → lunarDay = 0 (or "новолуние")
+   402→//   - Day after new moon: age = 1.0+ → lunarDay = 1 ("1 день")
+   403→//   - Day N after new moon: lunarDay = N
+   404→//
+   405→// No more moonrise-based counting — that was inconsistent (per-day phase variation
+   406→// caused off-by-one errors when adjacent days' phases straddled an integer boundary).
+   407→// Now the day number is stable: increments by 1 each solar day, never goes backwards.
+   408→export function computeUserLunarDay(_now: Date, _moonrises: Date[], phase: number): number {
+   409→  const age = phase * SYNODIC_MONTH;
+   410→  return Math.floor(age);
+   411→}
+   412→
+   413→// Find the most recent new moon before `now` using the lunar epoch + synodic month.
+   414→// Iterates backwards from `now` to find the largest t such that
+   415→// t = LUNAR_EPOCH_MS + k * SYNODIC_MONTH * ms_per_day, t <= now.
+   416→export function mostRecentNewMoon(now: Date): Date {
+   417→  const msPerDay = 1000 * 60 * 60 * 24;
+   418→  const msPerCycle = SYNODIC_MONTH * msPerDay;
+   419→  const elapsedMs = now.getTime() - LUNAR_EPOCH_MS;
+   420→  const cycles = Math.floor(elapsedMs / msPerCycle);
+   421→  return new Date(LUNAR_EPOCH_MS + cycles * msPerCycle);
+   422→}
+   423→
+   424→// Wind speed sub-score: ideal [lo,hi], >badMps → low
+   425→export function windSpeedScore(speed: number, lo: number, hi: number, badMps: number): number {
+   426→  if (speed >= lo && speed <= hi) return 95;
+   427→  if (speed > badMps) return 10;
+   428→  if (speed < lo) {
+   429→    const d = lo - speed;
+   430→    return Math.max(20, Math.round(95 - d * 10));
+   431→  }
+   432→  const d = speed - hi;
+   433→  return Math.max(10, Math.round(95 - d * 15));
+   434→}
+   435→
+   436→// Cloud cover sub-score (0..100%)
+   437→export function cloudCoverScore(cover: number, preference: "overcast" | "sunny" | "neutral"): number {
+   438→  if (preference === "neutral") return 70;
+   439→  if (preference === "overcast") {
+   440→    return Math.round((cover / 100) * 90 + 10);
+   441→  }
+   442→  return Math.round(((100 - cover) / 100) * 90 + 10);
+   443→}
+   444→
+   445→// ----------------- Per-species config (rebalanced per Task 4 spec) -----------------
+   446→
+   447→export const DEFAULT_WEIGHTS: Record<Species, FishWeights> = {
+   448→  // Карась: windDirection увеличен до 0.10 (по правилу пользователя: S/W норм, N/E не очень).
+   449→  карась: {
+   450→    waterTemp: 0.35,
+   451→    pressureTrend: 0.20,
+   452→    pressureValue: 0.05,
+   453→    windSpeed: 0.15,
+   454→    windDirection: 0.10,
+   455→    timeOfDay: 0.10,
+   456→    moonPhase: 0.05,
+   457→  },
+   458→  // Сазан: windDirection 0.10 (сазан чувствителен к тёплым S/SW ветрам — они нагоняют корм).
+   459→  сазан: {
+   460→    waterTemp: 0.40,
+   461→    pressureTrend: 0.15,
+   462→    pressureValue: 0.05,
+   463→    windSpeed: 0.10,
+   464→    windDirection: 0.10,
+   465→    timeOfDay: 0.15,
+   466→    moonPhase: 0.05,
+   467→  },
+   468→  // Сом: добавлен windDirection 0.05 (сом любит тёплые южные ветра — нагоняют корм в прибрежную зону).
+   469→  сом: {
+   470→    waterTemp: 0.40,
+   471→    timeOfDay: 0.20,
+   472→    pressureTrend: 0.15,
+   473→    pressureValue: 0.05,
+   474→    windSpeed: 0.10,
+   475→    windDirection: 0.05,
+   476→    moonPhase: 0.10,
+   477→  },
+   478→  // Щука: добавлен windDirection 0.05 (хищник, но на направление ветра реагирует слабо — низкий вес).
+   479→  щука: {
+   480→    pressureTrend: 0.25,
+   481→    waterTemp: 0.20,
+   482→    cloudCover: 0.15,
+   483→    timeOfDay: 0.15,
+   484→    windSpeed: 0.10,
+   485→    windDirection: 0.05,
+   486→    moonPhase: 0.10,
+   487→  },
+   488→};
+   489→
+   490→// Per-species scoring inputs
+   491→export interface HourInput {
+   492→  airTemp: number;
+   493→  waterTemp: number;
+   494→  windSpeed: number;
+   495→  windDir: number; // degrees
+   496→  pressureMmHg: number;
+   497→  pressureTrend: PressureTrend;
+   498→  precipitation: number;
+   499→  cloudCover: number;
+   500→  weatherCode: number;
+   501→  minutesFromSunEvent: number; // for time-of-day (dawn/dusk)
+   502→  isNight: boolean; // for catfish night logic
+   503→  moonPhaseValue: number; // 0..1 (astronomical phase, for emoji display)
+   504→  lunarDay: number; // 1..30 (Russian fishing tradition: by moonrise at spot coords)
+   505→}
+   506→
+   507→// Per-species scoring function
+   508→export function scoreForSpecies(species: Species, weights: FishWeights, input: HourInput): number {
+   509→  const subscores: Record<string, number> = {};
+   510→
+   511→  // Water temperature — piecewise curve per species.
+   512→  if (weights.waterTemp) {
+   513→    subscores.waterTemp = waterTempScore(species, input.waterTemp);
+   514→  }
+   515→
+   516→  // Pressure trend — table-driven per species.
+   517→  if (weights.pressureTrend) {
+   518→    subscores.pressureTrend = pressureTrendScore(input.pressureTrend, species);
+   519→  }
+   520→
+   521→  // Pressure value — same formula for all species (broad band, minor factor).
+   522→  if (weights.pressureValue) {
+   523→    subscores.pressureValue = pressureValueScore(input.pressureMmHg);
+   524→  }
+   525→
+   526→  // Wind speed
+   527→  if (weights.windSpeed) {
+   528→    if (species === "сом") {
+   529→      subscores.windSpeed = windSpeedScore(input.windSpeed, 1, 3, 5);
+   530→    } else if (species === "щука") {
+   531→      subscores.windSpeed = windSpeedScore(input.windSpeed, 2, 5, 8);
+   532→    } else if (species === "карась") {
+   533→      subscores.windSpeed = windSpeedScore(input.windSpeed, 1, 4, 7);
+   534→    } else if (species === "сазан") {
+   535→      subscores.windSpeed = windSpeedScore(input.windSpeed, 1, 5, 8);
+   536→    }
+   537→  }
+   538→
+   539→  // Wind direction
+   540→  if (weights.windDirection) {
+   541→    subscores.windDirection = windDirScore(input.windDir, [180, 225, 270]);
+   542→  }
+   543→
+   544→  // Time of day
+   545→  // Time of day — species-specific (was: pure Gaussian for all, which gave ~0 at noon
+   546→  // even for щука — wrong, since predators hunt during the day).
+   547→  // dawnDuskScore = Gaussian peak at sunrise/sunset (sigma=60 min).
+   548→  // Базовые уровни (baseline) применяются, если Gaussian даёт меньше:
+   549→  //   Щука днем: 65 (хищник, охотится весь день)
+   550→  //   Карась/Сазан днем: 50 (клюёт, но слабее зорьки)
+   551→  //   Сом днем: 25 (ночник, днём прячется)
+   552→  // Ночью: щука=25 (визуальный охотник), карась/сазан=25, сом=95 (пик)
+   553→  if (weights.timeOfDay) {
+   554→    const dist = Math.min(input.minutesFromSunEvent, 720); // cap at 12h
+   555→    const dawnDuskScore = 100 * Math.exp(-(dist * dist) / (60 * 60));
+   556→
+   557→    if (species === "сом") {
+   558→      // Ночной хищник: пик ночью, переходные часы (рассвет/закат) — 80, днём — 25
+   559→      subscores.timeOfDay = input.isNight
+   560→        ? 95
+   561→        : Math.max(25, Math.round(dawnDuskScore * 0.8));
+   562→    } else if (species === "щука") {
+   563→      // Хищник-засадчик: пик на рассвете/закате (90+), днём — 65 (продолжает охотиться),
+   564→      // ночью — 25 (визуальный охотник, в темноте не видит)
+   565→      subscores.timeOfDay = input.isNight
+   566→        ? 25
+   567→        : Math.round(Math.max(65, dawnDuskScore));
+   568→    } else {
+   569→      // Карась, сазан: пик на зорьке (90+), днём — 50 (клюёт, но слабее),
+   570→      // ночью — 25 (неактивны в темноте)
+   571→      subscores.timeOfDay = input.isNight
+   572→        ? 25
+   573→        : Math.round(Math.max(50, dawnDuskScore));
+   574→    }
+   575→  }
+   576→
+   577→  // Moon phase — одинаковая таблица 28-дневного цикла для всех видов рыб.
+   578→  // Используем lunarDay (по восходам луны на координатах места) вместо
+   579→  // глобальной фазы — это даёт корректный лунный день для русского календаря.
+   580→  if (weights.moonPhase) {
+   581→    subscores.moonPhase = moonPhaseScore(input.lunarDay);
+   582→  }
+   583→
+   584→  // Cloud cover (only щука uses this)
+   585→  if (weights.cloudCover) {
+   586→    subscores.cloudCover = cloudCoverScore(input.cloudCover, "overcast");
+   587→  }
+   588→
+   589→  // Weighted average
+   590→  let total = 0;
+   591→  let weightSum = 0;
+   592→  for (const [key, w] of Object.entries(weights)) {
+   593→    const wnum = w as number;
+   594→    if (wnum && subscores[key] != null) {
+   595→      total += wnum * subscores[key];
+   596→      weightSum += wnum;
+   597→    }
+   598→  }
+   599→  if (weightSum === 0) return 0;
+   600→  let finalScore = Math.round(total / weightSum);
+   601→
+   602→  // Water-temperature gate — критически важная защита от абсурдных оценок.
+   603→  // Если вода слишком холодная (или слишком тёплая) — рыба физически не активна,
+   604→  // даже при идеальном давлении/ветре/времени суток. Множитель 0..1:
+   605→  //   sub-score 50 (= порог активности) → gate 1.0 (без штрафа)
+   606→  //   sub-score 25 (слабая активность)  → gate 0.5
+   607→  //   sub-score 5  (рыба спит)         → gate 0.1 (сильный штраф)
+   608→  // Это делает температуру воды «вратами» для клёва, а не просто одним из факторов.
+   609→  if (subscores.waterTemp != null) {
+   610→    const tempGate = Math.min(1, subscores.waterTemp / 50);
+   611→    finalScore = Math.round(finalScore * tempGate);
+   612→  }
+   613→
+   614→  return finalScore;
+   615→}
+   616→
+   617→// Top contributing factors (for "Почему так?" tooltip).
+   618→// Returns top 2 factors by weighted contribution * (subscore - 50).
+   619→export function topFactors(species: Species, weights: FishWeights, input: HourInput): string[] {
+   620→  const results: { factor: string; contribution: number }[] = [];
+   621→
+   622→  const w = weights;
+   623→  if (w.waterTemp) {
+   624→    const s = waterTempScore(species, input.waterTemp);
+   625→    results.push({ factor: "Температура воды", contribution: (w.waterTemp as number) * (s - 50) });
+   626→  }
+   627→  if (w.pressureTrend) {
+   628→    const s = pressureTrendScore(input.pressureTrend, species);
+   629→    results.push({ factor: "Тенденция давления", contribution: (w.pressureTrend as number) * (s - 50) });
+   630→  }
+   631→  if (w.pressureValue) {
+   632→    const s = pressureValueScore(input.pressureMmHg);
+   633→    results.push({ factor: "Значение давления", contribution: (w.pressureValue as number) * (s - 50) });
+   634→  }
+   635→  if (w.windSpeed) {
+   636→    let s: number;
+   637→    if (species === "сом") s = windSpeedScore(input.windSpeed, 1, 3, 5);
+   638→    else if (species === "щука") s = windSpeedScore(input.windSpeed, 2, 5, 8);
+   639→    else if (species === "карась") s = windSpeedScore(input.windSpeed, 1, 4, 7);
+   640→    else s = windSpeedScore(input.windSpeed, 1, 5, 8);
+   641→    results.push({ factor: "Скорость ветра", contribution: (w.windSpeed as number) * (s - 50) });
+   642→  }
+   643→  if (w.windDirection) {
+   644→    const s = windDirScore(input.windDir, [180, 225, 270]);
+   645→    results.push({ factor: "Направление ветра", contribution: (w.windDirection as number) * (s - 50) });
+   646→  }
+   647→  if (w.timeOfDay) {
+   648→    // Same species-specific logic as in scoreForSpecies (see comments there).
+   649→    const dist = Math.min(input.minutesFromSunEvent, 720);
+   650→    const dawnDuskScore = 100 * Math.exp(-(dist * dist) / (60 * 60));
+   651→    let s: number;
+   652→    if (species === "сом") {
+   653→      s = input.isNight ? 95 : Math.max(25, Math.round(dawnDuskScore * 0.8));
+   654→    } else if (species === "щука") {
+   655→      s = input.isNight ? 25 : Math.round(Math.max(65, dawnDuskScore));
+   656→    } else {
+   657→      s = input.isNight ? 25 : Math.round(Math.max(50, dawnDuskScore));
+   658→    }
+   659→    results.push({ factor: "Время суток", contribution: (w.timeOfDay as number) * (s - 50) });
+   660→  }
+   661→  if (w.moonPhase) {
+   662→    const s = moonPhaseScore(input.lunarDay);
+   663→    results.push({ factor: "Фаза луны", contribution: (w.moonPhase as number) * (s - 50) });
+   664→  }
+   665→  if (w.cloudCover && species === "щука") {
+   666→    const s = cloudCoverScore(input.cloudCover, "overcast");
+   667→    results.push({ factor: "Облачность", contribution: (w.cloudCover as number) * (s - 50) });
+   668→  }
+   669→
+   670→  results.sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution));
+   671→  return results.slice(0, 2).map((r) => r.factor);
+   672→}
+   673→
+   674→// ----------------- Water temperature estimation -----------------
+   675→
+   676→// Mean air temperature over the past 3 days BEFORE the forecast starts.
+   677→// Open-Meteo response: with past_days=35 + forecast_days=7, hourly array has 42*24=1008 hours.
+   678→// Past 3 days before forecast = indices [N-168-72, N-168) = last 72 hours of past data.
+   679→// If past_days=3 (legacy), the first 72 hours are the past 3 days — function still works.
+   680→export function meanPast3DaysAirTemp(temps: number[]): number {
+   681→  if (temps.length === 0) return 15;
+   682→  // Last 72 hours BEFORE the last 168 (forecast) hours.
+   683→  const forecastLen = 168;
+   684→  let slice: number[];
+   685→  if (temps.length > forecastLen + 72) {
+   686→    // past_days >= 3: take the 72 hours right before forecast starts.
+   687→    slice = temps.slice(temps.length - forecastLen - 72, temps.length - forecastLen);
+   688→  } else if (temps.length >= 72) {
+   689→    // Fallback: take the first 72 hours (assumes past_days=3, no forecast data prepended).
+   690→    slice = temps.slice(0, 72);
+   691→  } else {
+   692→    slice = temps;
+   693→  }
+   694→  return slice.reduce((s, v) => s + v, 0) / slice.length;
+   695→}
+   696→
+   697→// Seasonal piecewise formula based on avg3 (mean of past 3 days air temp).
+   698→// Rivers have lower thermal inertia (1-2 day lag) than lakes (5-7 day lag).
+   699→export function estimateWaterTemp(avg3: number, waterType: "river" | "lake"): number {
+   700→  let base: number;
+   701→  if (avg3 < 4) {
+   702→    // Winter: water stays above freezing
+   703→    base = Math.max(0.5, 0.7 * avg3 + 2);
+   704→  } else if (avg3 < 12) {
+   705→    // Spring warming: water lags behind air
+   706→    base = 0.8 * avg3 + 1;
+   707→  } else if (avg3 < 20) {
+   708→    // Transitional: water close to air
+   709→    base = 0.95 * avg3;
+   710→  } else {
+   711→    // Summer: water slightly cooler than air (evaporative cooling)
+   712→    base = 0.9 * avg3;
+   713→  }
+   714→  // Rivers flow → mix → more responsive (closer to air). Lakes retain heat → smooth.
+   715→  if (waterType === "lake") {
+   716→    base = base * 0.97;
+   717→  }
+   718→  return Math.max(0, Math.min(35, Math.round(base * 10) / 10));
+   719→}
+   720→
