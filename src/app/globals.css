@@ -1,0 +1,156 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --radius: 0.625rem;
+  /* Light theme — nature palette */
+  --background: #f5f1e8;       /* warm paper */
+  --foreground: #1a2e1f;       /* deep forest green text */
+  --card: #ffffff;
+  --card-foreground: #1a2e1f;
+  --popover: #ffffff;
+  --popover-foreground: #1a2e1f;
+  --primary: #2d5a3d;          /* forest green */
+  --primary-foreground: #f5f1e8;
+  --secondary: #5b8c5a;         /* sage */
+  --secondary-foreground: #f5f1e8;
+  --muted: #e8e0cc;
+  --muted-foreground: #8b9d83;
+  --accent: #d97706;           /* sunrise orange */
+  --accent-foreground: #ffffff;
+  --destructive: #b91c1c;
+  --border: #d4c8a8;
+  --input: #e8e0cc;
+  --ring: #2d5a3d;
+  /* Chart colors (4 species + extra) */
+  --chart-1: #b8860b;   /* карась — gold */
+  --chart-2: #a0522d;   /* сазан — sienna */
+  --chart-3: #4b5d3a;   /* сом — olive */
+  --chart-4: #5b8c5a;   /* щука — sage */
+  --chart-5: #d97706;   /* accent orange */
+  --sidebar: #f5f1e8;
+  --sidebar-foreground: #1a2e1f;
+  --sidebar-primary: #2d5a3d;
+  --sidebar-primary-foreground: #f5f1e8;
+  --sidebar-accent: #e8e0cc;
+  --sidebar-accent-foreground: #1a2e1f;
+  --sidebar-border: #d4c8a8;
+  --sidebar-ring: #2d5a3d;
+}
+
+.dark {
+  /* Dark theme — deep forest greens with cream text */
+  --background: #0f1a13;
+  --foreground: #f5f1e8;
+  --card: #16241a;
+  --card-foreground: #f5f1e8;
+  --popover: #16241a;
+  --popover-foreground: #f5f1e8;
+  --primary: #6fa67a;        /* lighter sage primary for contrast */
+  --primary-foreground: #0f1a13;
+  --secondary: #2d5a3d;
+  --secondary-foreground: #f5f1e8;
+  --muted: #1e2d22;
+  --muted-foreground: #8b9d83;
+  --accent: #f59e0b;          /* lighter orange for dark */
+  --accent-foreground: #0f1a13;
+  --destructive: #ef4444;
+  --border: #2a3d2e;
+  --input: #1e2d22;
+  --ring: #6fa67a;
+  --chart-1: #d4a73b;
+  --chart-2: #c47a4d;
+  --chart-3: #7d9163;
+  --chart-4: #8db98c;
+  --chart-5: #f59e0b;
+  --sidebar: #16241a;
+  --sidebar-foreground: #f5f1e8;
+  --sidebar-primary: #6fa67a;
+  --sidebar-primary-foreground: #0f1a13;
+  --sidebar-accent: #1e2d22;
+  --sidebar-accent-foreground: #f5f1e8;
+  --sidebar-border: #2a3d2e;
+  --sidebar-ring: #6fa67a;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+  /* Custom scrollbar for long lists */
+  .nice-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--muted) transparent;
+  }
+  .nice-scroll::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .nice-scroll::-webkit-scrollbar-thumb {
+    background: var(--muted);
+    border-radius: 6px;
+  }
+  .nice-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/* Hide scrollbar on horizontal scroll rows but keep functional */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Safe-area padding for mobile bottom nav */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
