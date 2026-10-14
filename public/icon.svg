@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#1a3a2e"/>
+  <!-- water waves -->
+  <path d="M40 320 q60 -20 120 0 t120 0 t120 0 t120 0 v40 h-480 z" fill="#5b8c5a" opacity="0.6"/>
+  <path d="M40 360 q60 -20 120 0 t120 0 t120 0 t120 0 v60 h-480 z" fill="#2d5a3d"/>
+  <!-- fish body -->
+  <g fill="#f5f1e8">
+    <path d="M150 240 q60 -50 130 -10 q40 20 70 10 q-30 25 -70 30 q-30 30 -70 20 q-50 -10 -50 -50 z"/>
+    <path d="M350 240 l40 -30 v60 z"/>
+    <circle cx="180" cy="235" r="6" fill="#1a3a2e"/>
+  </g>
+  <!-- sun -->
+  <circle cx="380" cy="120" r="34" fill="#d97706"/>
+  <g stroke="#d97706" stroke-width="6" stroke-linecap="round">
+    <line x1="380" y1="60" x2="380" y2="40"/>
+    <line x1="380" y1="200" x2="380" y2="220"/>
+    <line x1="320" y1="120" x2="300" y2="120"/>
+    <line x1="440" y1="120" x2="460" y2="120"/>
+    <line x1="335" y1="75" x2="320" y2="60"/>
+    <line x1="425" y1="165" x2="440" y2="180"/>
+    <line x1="335" y1="165" x2="320" y2="180"/>
+    <line x1="425" y1="75" x2="440" y2="60"/>
+  </g>
+</svg>
