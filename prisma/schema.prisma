@@ -1,0 +1,69 @@
+// Prisma schema for "Прогноз клёва" PWA
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Spot {
+  id          String   @id @default(cuid())
+  name        String
+  latitude    Float
+  longitude   Float
+  description String?
+  waterType   String   // "river" | "lake"
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  catches     Catch[]
+  sessions    Session[]
+}
+
+model Session {
+  id               String   @id @default(cuid())
+  spotId           String
+  spot             Spot     @relation(fields: [spotId], references: [id], onDelete: Cascade)
+  startedAt        DateTime @default(now())
+  waterTemp        Float?   // manual override, °C
+  windDirOverride  Int?     // degrees, manual override
+  windSpeedOverride Float?  // m/s, manual override
+  pressureOverride Float?   // mmHg, manual override
+  notes            String?
+  endedAt          DateTime?
+  createdAt        DateTime @default(now())
+  catches          Catch[]
+}
+
+model Catch {
+  id             String   @id @default(cuid())
+  spotId         String
+  spot           Spot     @relation(fields: [spotId], references: [id], onDelete: Cascade)
+  species        String   // "карась" | "сазан" | "сом" | "щука"
+  weightKg       Float
+  lengthCm       Float?
+  caughtAt       DateTime @default(now())
+  bait           String?
+  notes          String?
+  sessionId      String?
+  session        Session?  @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  // Snapshot of conditions at catch time, for analytics:
+  waterTemp      Float?
+  airTemp        Float?
+  windSpeed      Float?
+  windDir        Int?
+  pressure       Float?
+  moonPhase      Float?   // 0..1
+  predictedScore Float?   // the bite score the algorithm predicted for this species at this time
+  createdAt      DateTime @default(now())
+}
+
+model FishConfig {
+  id          String   @id @default(cuid())
+  species     String   @unique // "карась" | "сазан" | "сом" | "щука"
+  weightsJson String   // JSON-encoded weights, e.g. {"waterTemp":0.35,...}
+  enabled     Boolean  @default(true)
+  updatedAt   DateTime @updatedAt
+}
