@@ -54,7 +54,7 @@ export function HomeTab() {
     queryKey: ["forecast", currentSpotId, targetSpecies],
     queryFn: () => api.forecast({ spotId: currentSpotId!, targetSpecies }),
     enabled: !!currentSpotId,
-    staleTime: 60 * 1000,
+    staleTime: 30 * 60 * 1000, // 30 min cache
   });
 
   const todayHours = useMemo(() => {

@@ -10,9 +10,9 @@ if (!globalForCache.weatherCache) {
 
 export const weatherCache = globalForCache.weatherCache;
 
-export const WEATHER_CACHE_TTL_MS = 10 * 60 * 1000; // 10 min
+export const WEATHER_CACHE_TTL_MS = 30 * 60 * 1000; // 30 min — reduces Open-Meteo API calls
 
-const CACHE_VERSION = "v5-moon"; // bump to invalidate stale entries across deploys
+const CACHE_VERSION = "v9-sst-retry"; // bump to invalidate stale entries
 
 export function getCached<T>(key: string): T | null {
   const hit = weatherCache.get(CACHE_VERSION + key);

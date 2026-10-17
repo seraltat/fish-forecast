@@ -9,7 +9,7 @@ export function QueryProvider({ children }: { children: ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            staleTime: 60 * 1000,
+            staleTime: 30 * 60 * 1000, // 30 min — reduces API calls on Vercel
             retry: 1,
             refetchOnWindowFocus: false,
           },

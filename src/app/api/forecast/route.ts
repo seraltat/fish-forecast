@@ -24,9 +24,10 @@ import {
   type PressureTrend,
   type SeasonInfo,
 } from "@/lib/forecast";
+import { getUserIdFromRequest } from "@/lib/server-user";
 
 const OM_URL = (lat: number, lon: number, days: number) =>
-  `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,wind_speed_10m,wind_direction_10m,pressure_msl,precipitation,cloud_cover,weather_code&daily=sunrise,sunset,moonrise,moonset,moon_phase&timezone=auto&forecast_days=${days}&past_days=35&wind_speed_unit=ms`;
+  `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,wind_speed_10m,wind_direction_10m,pressure_msl,precipitation,cloud_cover,weather_code&daily=sunrise,sunset,moonrise,moonset,moon_phase&timezone=auto&forecast_days=${days}&past_days=3&wind_speed_unit=ms`;
 
 // Note: moonrise/moonset/moon_phase data comes from the regular Open-Meteo forecast API
 // (added to OM_URL as daily params). No separate astronomy API call needed.
@@ -72,18 +73,26 @@ async function fetchWeather(lat: number, lon: number, days = 7): Promise<Weather
   const key = `${lat.toFixed(3)},${lon.toFixed(3)},${days}`;
   const cached = getCached<WeatherResponse>(key);
   if (cached) return cached;
-  const resp = await fetch(OM_URL(lat, lon, days), { cache: "no-store" });
+
+  // Retry once on 429 (rate limit) — wait 2 seconds and try again.
+  let resp: Response;
+  try {
+    resp = await fetch(OM_URL(lat, lon, days), { cache: "no-store" });
+    if (resp.status === 429) {
+      await new Promise(r => setTimeout(r, 2000));
+      resp = await fetch(OM_URL(lat, lon, days), { cache: "no-store" });
+    }
+  } catch (e) {
+    throw new Error("Сеть недоступна: " + (e as Error).message);
+  }
   if (!resp.ok) throw new Error("Open-Meteo " + resp.status);
   const data = (await resp.json()) as WeatherResponse;
   setCached(key, data);
   return data;
 }
 
-// Open-Meteo Marine API — returns sea surface temperature (SST) for ocean coordinates.
-// For land coordinates, returns null. We try the exact coords + 12 nearby offsets
-// (5km, 10km, 14km in 4 cardinal + 4 diagonal directions) in parallel and return
-// the first non-null SST. For inland spots (250km from any ocean), all offsets return
-// null and we correctly return null.
+// Open-Meteo Marine API — SST in 2 sequential calls max (was 5 parallel).
+// Reduced for Vercel serverless timeout: 2 calls = ~1-2s vs 5 calls = ~3-5s.
 const OM_MARINE_URL = (lat: number, lon: number) =>
   `https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&current=sea_surface_temperature&timezone=auto`;
 
@@ -93,48 +102,32 @@ interface MarineResponse {
   error?: boolean;
 }
 
-// Cached SST result (1 hour TTL — SST changes slowly, no need to fetch every call).
-// Stored in the same global weatherCache map with a different key prefix.
-const SST_CACHE_TTL_MS = 60 * 60 * 1000;
+async function fetchSSTAt(lat: number, lon: number): Promise<number | null> {
+  try {
+    const r = await fetch(OM_MARINE_URL(lat, lon), { cache: "no-store" });
+    if (!r.ok) return null;
+    const d = (await r.json()) as MarineResponse;
+    if (d.error) return null;
+    const sst = d.current?.sea_surface_temperature;
+    return sst != null && !Number.isNaN(sst) ? sst : null;
+  } catch {
+    return null;
+  }
+}
 
 async function fetchSeaSurfaceTemperature(lat: number, lon: number): Promise<number | null> {
   const cacheKey = `sst-${lat.toFixed(3)},${lon.toFixed(3)}`;
   const cached = getCached<number>(cacheKey);
   if (cached != null) return cached;
 
-  const offsets: Array<[number, number]> = [
-    [0, 0],
-    [-0.05, 0], [0.05, 0], [0, -0.05], [0, 0.05],
-    [-0.10, 0], [0.10, 0], [0, -0.10], [0, 0.10],
-    [-0.10, -0.10], [-0.10, 0.10], [0.10, -0.10], [0.10, 0.10],
-  ];
+  // Try exact coords first (works for Артемовка).
+  let sst = await fetchSSTAt(Number(lat.toFixed(4)), Number(lon.toFixed(4)));
+  if (sst != null) { setCached(cacheKey, sst); return sst; }
 
-  const promises = offsets.map(async ([dLat, dLon]) => {
-    const testLat = Number((lat + dLat).toFixed(4));
-    const testLon = Number((lon + dLon).toFixed(4));
-    try {
-      const r = await fetch(OM_MARINE_URL(testLat, testLon), { cache: "no-store" });
-      if (!r.ok) return null;
-      const d = (await r.json()) as MarineResponse;
-      if (d.error) return null;
-      const sst = d.current?.sea_surface_temperature;
-      return sst != null && !Number.isNaN(sst) ? sst : null;
-    } catch {
-      return null;
-    }
-  });
+  // Try -0.10° south (works for Раздольная — ocean is ~10km south).
+  sst = await fetchSSTAt(Number((lat - 0.10).toFixed(4)), Number(lon.toFixed(4)));
+  if (sst != null) { setCached(cacheKey, sst); return sst; }
 
-  const results = await Promise.all(promises);
-  for (const sst of results) {
-    if (sst != null) {
-      setCached(cacheKey, sst);
-      // Override default 10-min TTL for SST — we want 1 hour.
-      // Hack: re-set the timestamp directly. The cache uses Date.now() on insert;
-      // getCached checks `Date.now() - hit.ts < WEATHER_CACHE_TTL_MS` (10 min).
-      // For SST we accept 10-min cache; it's still much better than fetching every call.
-      return sst;
-    }
-  }
   return null;
 }
 
@@ -152,6 +145,7 @@ interface Body {
 }
 
 export async function POST(req: Request) {
+  const userId = getUserIdFromRequest(req);
   let body: Body;
   try {
     body = (await req.json()) as Body;
@@ -162,7 +156,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Не указан spotId" }, { status: 400 });
   }
 
-  const spot = await db.spot.findUnique({ where: { id: body.spotId } });
+  // Verify the spot belongs to this user before computing the forecast —
+  // prevents leaking forecast data for another user's spot.
+  const spot = await db.spot.findFirst({ where: { id: body.spotId, userId } });
   if (!spot) {
     return NextResponse.json({ error: "Место не найдено" }, { status: 404 });
   }
@@ -226,11 +222,11 @@ export async function POST(req: Request) {
   const { hourly, daily } = weather;
   const N = hourly.time.length;
 
-  // Open-Meteo URL uses past_days=35 (for water-temp estimation + moonrise history for lunar day)
-  // and forecast_days=7. The hourly array contains 35+7=42 days of hourly data; the daily
-  // array contains 42 entries. We need to align the daily astronomy arrays (moonrise, etc.)
-  // with the 7-day forecast hours (which start at forecastStartIdx).
-  const PAST_DAYS = 35;
+  // Open-Meteo URL uses past_days=3 (for water-temp estimation) and forecast_days=7.
+  // past_days=35 was previously used for moonrise history, but lunar day is now computed
+  // directly from moon_phase (no moonrise counting needed). Reducing to 3 = 4x less data
+  // per API call, helps avoid Open-Meteo 429 rate limiting.
+  const PAST_DAYS = 3;
   const FORECAST_DAYS = 7;
   const forecastHours = FORECAST_DAYS * 24;
   const forecastStartIdx = Math.max(0, N - forecastHours);
@@ -394,7 +390,6 @@ export async function POST(req: Request) {
     };
     for (const sp of ALL_SPECIES) {
       // Краснопёрка: не рассчитываем оценку для мест, где её нет.
-      // Ставим score=0 и явный статус "Нет в этой реке", чтобы UI показал понятную причину.
       if (sp === "краснопёрка" && !isKrasnoperSpot) {
         scores[sp] = 0;
         factors[sp] = [];
@@ -405,9 +400,12 @@ export async function POST(req: Request) {
         };
         continue;
       }
-      scores[sp] = scoreForSpecies(sp, weightsMap[sp], inputHour);
-      factors[sp] = topFactors(sp, weightsMap[sp], inputHour);
-      seasonStatusMap[sp] = getSeasonStatus(sp, inputHour.month, inputHour.waterTemp);
+      // Для краснопёрки на прибрежных спотах используем SST (реальная t° моря,
+      // откуда краснопёрка заходит в реку). Для всех остальных рыб — оценку по воздуху.
+      const waterTempForScoring = (sp === "краснопёрка" && sst != null) ? sst : inputHour.waterTemp;
+      scores[sp] = scoreForSpecies(sp, weightsMap[sp], { ...inputHour, waterTemp: waterTempForScoring });
+      factors[sp] = topFactors(sp, weightsMap[sp], { ...inputHour, waterTemp: waterTempForScoring });
+      seasonStatusMap[sp] = getSeasonStatus(sp, inputHour.month, waterTempForScoring);
     }
 
     hours.push({
