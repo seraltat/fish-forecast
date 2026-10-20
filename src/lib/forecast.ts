@@ -878,6 +878,10 @@ export interface HourInput {
   moonPhaseValue: number; // 0..1 (astronomical phase, for emoji display)
   lunarDay: number; // 1..30 (Russian fishing tradition: by moonrise at spot coords)
   month: number; // 1-12, for season status detection
+  // Optional override for season logic — used by краснопёрка: score is computed
+  // from river waterTemp, but season (migration trigger) is determined by
+  // SST in the bays. When set, season logic uses seasonTemp instead of waterTemp.
+  seasonTemp?: number;
 }
 
 // Per-species scoring function
@@ -1007,7 +1011,9 @@ export function scoreForSpecies(species: Species, weights: FishWeights, input: H
 
   // Apply season modifier (for карась and сазан — off-season, spawning, etc.)
   // сом and щука always return 1.0 (no seasonal rules).
-  const season = getSeasonStatus(species, input.month, input.waterTemp);
+  // краснопёрка: season uses seasonTemp (SST) if provided — migration trigger
+  // depends on bay temperature, not river water temp.
+  const season = getSeasonStatus(species, input.month, input.seasonTemp ?? input.waterTemp);
   finalScore = Math.round(finalScore * seasonModifier(season.status));
 
   return Math.min(100, Math.max(0, finalScore));

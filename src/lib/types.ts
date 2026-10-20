@@ -67,7 +67,7 @@ export interface ForecastResponse {
   enabledSpecies: Species[];
   waterTempEstimate: number;
   waterTempSource: "estimate" | "override";
-  waterTempSST: number | null; // sea surface temperature from Marine API (null for inland spots)
+  // waterTempSST removed — краснопёрка SST now lives in /api/krasnoperka
   utcOffsetSeconds: number; // spot's UTC offset (e.g. 36000 for UTC+10) — for client-side "now" calc
   // Astronomy data — moonrise/moonset/sunrise/sunset per day (parallel to daily.time).
   // Null entries when API unreachable or event doesn't occur that day.

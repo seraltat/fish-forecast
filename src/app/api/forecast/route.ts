@@ -21,10 +21,23 @@ import {
   weatherCodeLabel,
   windDirLabel,
   type FishWeights,
+  type HourInput,
   type PressureTrend,
   type SeasonInfo,
 } from "@/lib/forecast";
 import { getUserIdFromRequest } from "@/lib/server-user";
+
+// Краснопёрка не рассчитывается в per-spot прогнозе — её ход в реки зависит
+// от SST в заливах, не от конкретного места. Отдельный endpoint
+// /api/krasnoperka возвращает SST по заливам и статус "идёт/ещё рано".
+// В дневнике и настройках краснопёрка остаётся доступной.
+
+// Note: api.open-meteo.com (main weather fetch) is left using global fetch()
+// since it has only A (IPv4) records — no IPv6 path to fail on.
+// marine-api.open-meteo.com has BOTH A and AAAA records; in some environments
+// (Docker, IPv6-broken cloud sandboxes) Node's undici fetch hangs on the AAAA
+// lookup until ETIMEDOUT. Using node:https with family:4 forces IPv4-only and
+// avoids this. Same fix not needed for the main fetch (no AAAA record).
 
 const OM_URL = (lat: number, lon: number, days: number) =>
   `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,wind_speed_10m,wind_direction_10m,pressure_msl,precipitation,cloud_cover,weather_code&daily=sunrise,sunset,moonrise,moonset,moon_phase&timezone=auto&forecast_days=${days}&past_days=3&wind_speed_unit=ms`;
@@ -91,46 +104,6 @@ async function fetchWeather(lat: number, lon: number, days = 7): Promise<Weather
   return data;
 }
 
-// Open-Meteo Marine API — SST in 2 sequential calls max (was 5 parallel).
-// Reduced for Vercel serverless timeout: 2 calls = ~1-2s vs 5 calls = ~3-5s.
-const OM_MARINE_URL = (lat: number, lon: number) =>
-  `https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&current=sea_surface_temperature&timezone=auto`;
-
-interface MarineResponse {
-  current?: { sea_surface_temperature?: number | null };
-  reason?: string;
-  error?: boolean;
-}
-
-async function fetchSSTAt(lat: number, lon: number): Promise<number | null> {
-  try {
-    const r = await fetch(OM_MARINE_URL(lat, lon), { cache: "no-store" });
-    if (!r.ok) return null;
-    const d = (await r.json()) as MarineResponse;
-    if (d.error) return null;
-    const sst = d.current?.sea_surface_temperature;
-    return sst != null && !Number.isNaN(sst) ? sst : null;
-  } catch {
-    return null;
-  }
-}
-
-async function fetchSeaSurfaceTemperature(lat: number, lon: number): Promise<number | null> {
-  const cacheKey = `sst-${lat.toFixed(3)},${lon.toFixed(3)}`;
-  const cached = getCached<number>(cacheKey);
-  if (cached != null) return cached;
-
-  // Try exact coords first (works for Артемовка).
-  let sst = await fetchSSTAt(Number(lat.toFixed(4)), Number(lon.toFixed(4)));
-  if (sst != null) { setCached(cacheKey, sst); return sst; }
-
-  // Try -0.10° south (works for Раздольная — ocean is ~10km south).
-  sst = await fetchSSTAt(Number((lat - 0.10).toFixed(4)), Number(lon.toFixed(4)));
-  if (sst != null) { setCached(cacheKey, sst); return sst; }
-
-  return null;
-}
-
 function minutesBetween(a: Date, b: Date): number {
   return (a.getTime() - b.getTime()) / 60000;
 }
@@ -163,19 +136,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Место не найдено" }, { status: 404 });
   }
 
-  // Краснопёрка — полупроходная рыба. Встречается только в реках Раздольная и Артемовка
-  // (и их устьях). Для других мест — не рассчитываем, не показываем в UI.
-  const isKrasnoperSpot = spot.name === "Раздольная" || spot.name === "Артемовка";
+  // Краснопёрка — полупроходная рыба. Сезон зависит не от конкретной реки, а
+  // от температуры в заливах (Амурский + Уссурийский) — когда SST остывает
+  // до 8-10°C, краснопёрка массово идёт в речки и протоки (в любые). Поэтому
+  // SST тут глобальный, а не привязан к месту. Сама оценка краснопёрки
+  // считается по температуре воды в реке (как у всех), а сезон — по SST.
 
   // Load FishConfig rows
   const configs = await db.fishConfig.findMany();
   const weightsMap: Record<Species, FishWeights> = { ...DEFAULT_WEIGHTS };
   const enabled: Species[] = [];
   for (const sp of ALL_SPECIES) {
-    // Краснопёрка — только для мест Раздольная и Артемовка. Для других мест
-    // не рассчитываем оценку и не показываем в UI (chip скрыт, тоггл в Настройках
-    // остаётся глобально доступным).
-    if (sp === "краснопёрка" && !isKrasnoperSpot) continue;
     const cfg = configs.find((c) => c.species === sp);
     if (cfg) {
       try {
@@ -205,19 +176,8 @@ export async function POST(req: Request) {
   // Used for Russian-fishing-tradition lunar day calc + UI display.
   const { moonrises, pairsByDate } = extractMoonEventsFromWeather(weather);
 
-  // SST (sea surface temperature) from Marine API — additional info, not replacing
-  // the air-temp-based estimate. Used by UI to show real ocean temperature near the spot.
-  //
-  // SST shown ONLY for spots named "Раздольная" or "Артемовка" (per user request).
-  // Кипарисовка is a tributary of Раздольная — SST of Раздольная applies there,
-  // no separate SST needed. Other (inland) spots get null — Marine API returns null
-  // for land coordinates anyway.
-  // The algorithm continues to use the air-temp estimate (waterTempEstimate) — SST is
-  // shown for informational purposes only (e.g., user can manually override on
-  // Корректировка tab using the SST value if they want to switch the algorithm to use it).
-  const sst = isKrasnoperSpot
-    ? await fetchSeaSurfaceTemperature(spot.latitude, spot.longitude)
-    : null;
+  // SST-блок перенесён в отдельный endpoint /api/krasnoperka — краснопёрка
+  // не считается в per-spot прогнозе (см. комментарий в начале файла).
 
   const { hourly, daily } = weather;
   const N = hourly.time.length;
@@ -389,23 +349,23 @@ export async function POST(req: Request) {
       краснопёрка: { status: "active", label: "Активно", description: "" },
     };
     for (const sp of ALL_SPECIES) {
-      // Краснопёрка: не рассчитываем оценку для мест, где её нет.
-      if (sp === "краснопёрка" && !isKrasnoperSpot) {
+      // Краснопёрка не считается в per-spot прогнозе — её ход зависит от SST
+      // в заливах, не от конкретного места. Прогноз по краснопёрке доступен
+      // отдельной кнопкой во вкладке "Прогноз" (см. /api/krasnoperka).
+      if (sp === "краснопёрка") {
         scores[sp] = 0;
         factors[sp] = [];
         seasonStatusMap[sp] = {
           status: "off_season",
-          label: "Нет в этой реке",
-          description: "Краснопёрка водится только в Раздольной и Артемовке",
+          label: "См. вкладку «Прогноз» 🐟",
+          description: "Прогноз по краснопёрке — нажмите кнопку с красной рыбкой в правом верхнем углу вкладки «Прогноз»",
         };
         continue;
       }
-      // Для краснопёрки на прибрежных спотах используем SST (реальная t° моря,
-      // откуда краснопёрка заходит в реку). Для всех остальных рыб — оценку по воздуху.
-      const waterTempForScoring = (sp === "краснопёрка" && sst != null) ? sst : inputHour.waterTemp;
-      scores[sp] = scoreForSpecies(sp, weightsMap[sp], { ...inputHour, waterTemp: waterTempForScoring });
-      factors[sp] = topFactors(sp, weightsMap[sp], { ...inputHour, waterTemp: waterTempForScoring });
-      seasonStatusMap[sp] = getSeasonStatus(sp, inputHour.month, waterTempForScoring);
+      const input: HourInput = { ...inputHour };
+      scores[sp] = scoreForSpecies(sp, weightsMap[sp], input);
+      factors[sp] = topFactors(sp, weightsMap[sp], input);
+      seasonStatusMap[sp] = getSeasonStatus(sp, inputHour.month, inputHour.waterTemp);
     }
 
     hours.push({
@@ -440,7 +400,7 @@ export async function POST(req: Request) {
     enabledSpecies: enabled,
     waterTempEstimate,
     waterTempSource,
-    waterTempSST: sst, // null for inland spots; real SST value for coastal spots
+    // waterTempSST removed — краснопёрка SST now lives in /api/krasnoperka
     utcOffsetSeconds: (weather as { utc_offset_seconds?: number }).utc_offset_seconds ?? 0,
     moonrises: moonrisesArr,
     moonsets: moonsetsArr,

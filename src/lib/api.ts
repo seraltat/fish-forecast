@@ -1,11 +1,15 @@
 // Client-side API helpers using relative URLs.
+// All requests go through `apiFetch`, which attaches the per-browser
+// `x-user-id` header so the server can scope Spot/Catch/Session data
+// to the current anonymous user.
 import type { ForecastResponse } from "./types";
 import type { Species } from "./species";
+import { apiFetch } from "./user-id";
 
 const API = "/api";
 
 export async function apiGet<T>(path: string): Promise<T> {
-  const resp = await fetch(`${API}${path}`, {
+  const resp = await apiFetch(`${API}${path}`, {
     headers: { "Content-Type": "application/json" },
   });
   if (!resp.ok) {
@@ -16,7 +20,7 @@ export async function apiGet<T>(path: string): Promise<T> {
 }
 
 export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
-  const resp = await fetch(`${API}${path}`, {
+  const resp = await apiFetch(`${API}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
@@ -29,7 +33,7 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
 }
 
 export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
-  const resp = await fetch(`${API}${path}`, {
+  const resp = await apiFetch(`${API}${path}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -42,7 +46,7 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
 }
 
 export async function apiDelete<T>(path: string): Promise<T> {
-  const resp = await fetch(`${API}${path}`, { method: "DELETE" });
+  const resp = await apiFetch(`${API}${path}`, { method: "DELETE" });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ error: resp.statusText }));
     throw new Error(err.error || "Ошибка запроса");
@@ -66,12 +70,13 @@ export interface SpotDTO {
 export interface CatchDTO {
   id: string;
   spotId: string;
-  species: Species;
+  species: string; // Species key or разнорыбица sub-type name (arbitrary string)
   weightKg: number;
   lengthCm: number | null;
   caughtAt: string;
   bait: string | null;
   notes: string | null;
+  photo: string | null;
   sessionId: string | null;
   waterTemp: number | null;
   airTemp: number | null;
@@ -108,6 +113,22 @@ export const api = {
       apiPatch<{ spot: SpotDTO }>(`/spots/${id}`, b),
     remove: (id: string) => apiDelete<{ ok: boolean }>(`/spots/${id}`),
   },
+  // Краснопёрка — отдельный прогноз (не привязан к месту). Возвращает SST по заливам
+  // и статус миграции ("early" / "ready" / "winter").
+  krasnoperka: () => apiGet<{
+    bays: {
+      name: string;
+      latitude: number;
+      longitude: number;
+      sst: number | null;
+      status: "early" | "ready" | "winter" | "unknown";
+      label: string;
+      description: string;
+    }[];
+    overall: "early" | "ready" | "winter" | "unknown";
+    overallLabel: string;
+    fetchedAt: string;
+  }>("/krasnoperka"),
   weather: (lat: number, lon: number, days = 7) =>
     apiGet<unknown>(`/weather?lat=${lat}&lon=${lon}&days=${days}`),
   forecast: (b: {
@@ -142,12 +163,13 @@ export const api = {
     },
     create: (b: {
       spotId: string;
-      species: Species;
+      species: string; // accepts Species key OR разнорыбица sub-type name
       weightKg: number;
       lengthCm?: number | null;
       caughtAt?: string;
       bait?: string | null;
       notes?: string | null;
+      photo?: string | null;
       sessionId?: string | null;
       waterTemp?: number | null;
       airTemp?: number | null;
@@ -160,12 +182,13 @@ export const api = {
     batch: (b: {
       count: number;
       spotId: string;
-      species: Species;
+      species: string; // accepts Species key OR разнорыбица sub-type name
       weightKg: number;
       lengthCm?: number | null;
       caughtAt?: string;
       bait?: string | null;
       notes?: string | null;
+      photo?: string | null;
       sessionId?: string | null;
       waterTemp?: number | null;
       airTemp?: number | null;
@@ -181,4 +204,8 @@ export const api = {
     apiGet<unknown>(spotId ? `/analytics?spotId=${spotId}` : "/analytics"),
   seed: () => apiPost<{ created: number; updated: number; total: number }>("/seed"),
   reset: () => apiPost<{ ok: boolean }>("/reset", { confirm: "DELETE" }),
+  // One-time claim of legacy pre-isolation data. Idempotent — no-op after
+  // first call returns nonzero. See src/app/api/migrate/route.ts.
+  migrate: () =>
+    apiPost<{ claimed: { spots: number; catches: number; sessions: number }; userId: string }>("/migrate"),
 };

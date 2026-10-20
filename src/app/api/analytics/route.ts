@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { ALL_SPECIES, type Species } from "@/lib/species";
 import { DEFAULT_WEIGHTS, type FishWeights } from "@/lib/forecast";
+import { getUserIdFromRequest } from "@/lib/server-user";
 
 const BUCKETS = [
   { label: "0-20", min: 0, max: 20 },
@@ -11,59 +12,30 @@ const BUCKETS = [
   { label: "80-100", min: 80, max: 101 },
 ];
 
-// Краснопёрка водится только в устьях рек Раздольная и Артемовка
-// (полупроходной вид, живёт в опреснённых участках моря и заходит в реки).
-const KRASNOPERKA_SPOTS = new Set(["Раздольная", "Артемовка"]);
+// Краснопёрка — полупроходной вид, ловится в разных реках/протоках, впадающих в заливы.
+// Не привязываем её к конкретным именам мест — отображаем в аналитике везде,
+// где есть уловы краснопёрки (пользователь сам решает, где её ловить).
 
 export async function GET(req: Request) {
+  const userId = getUserIdFromRequest(req);
   const url = new URL(req.url);
   const spotId = url.searchParams.get("spotId") || undefined;
 
   const catches = await db.catch.findMany({
-    where: spotId ? { spotId } : undefined,
+    where: spotId ? { userId, spotId } : { userId },
     include: { spot: true },
   });
 
-  // Determine which species are "relevant" for this view:
-  //  - "Все места" (no spotId): include every species that has at least 1 catch.
-  //    Краснопёрка shows if there's any catch of her anywhere.
-  //  - Specific spot: include all species that have catches at this spot, PLUS
-  //    краснопёрка only if the spot is named "Раздольная" or "Артемовка".
+  // Determine which species are "relevant" for this view: any species that has
+  // at least 1 catch (in this spot, or anywhere if "Все места").
   let relevantSpecies: Species[] = [];
-  if (spotId) {
-    // Find spot name from first catch (or via Spot lookup if no catches).
-    let spotName: string | null = null;
-    if (catches.length > 0) {
-      spotName = catches[0]?.spot?.name ?? null;
-    } else {
-      const spot = await db.spot.findUnique({ where: { id: spotId } });
-      spotName = spot?.name ?? null;
+  const speciesWithCatches = new Set<Species>();
+  for (const c of catches) {
+    if (ALL_SPECIES.includes(c.species as Species)) {
+      speciesWithCatches.add(c.species as Species);
     }
-    const krasnoperAllowed = spotName != null && KRASNOPERKA_SPOTS.has(spotName);
-    const speciesWithCatches = new Set<Species>();
-    for (const c of catches) {
-      if (ALL_SPECIES.includes(c.species as Species)) {
-        speciesWithCatches.add(c.species as Species);
-      }
-    }
-    for (const sp of ALL_SPECIES) {
-      if (sp === "краснопёрка") {
-        if (krasnoperAllowed && speciesWithCatches.has(sp)) {
-          relevantSpecies.push(sp);
-        }
-      } else if (speciesWithCatches.has(sp)) {
-        relevantSpecies.push(sp);
-      }
-    }
-  } else {
-    const speciesWithCatches = new Set<Species>();
-    for (const c of catches) {
-      if (ALL_SPECIES.includes(c.species as Species)) {
-        speciesWithCatches.add(c.species as Species);
-      }
-    }
-    relevantSpecies = ALL_SPECIES.filter((sp) => speciesWithCatches.has(sp));
   }
+  relevantSpecies = ALL_SPECIES.filter((sp) => speciesWithCatches.has(sp));
 
   // Count per species — initialise from ALL_SPECIES (auto-includes краснопёрка)
   const countPerSpecies = {} as Record<Species, number>;

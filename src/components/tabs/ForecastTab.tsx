@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/fish/EmptyState";
 import { SpotSelector } from "@/components/fish/SpotSelector";
 import { ScoreBreakdownDialog } from "@/components/fish/ScoreBreakdownDialog";
+import { KrasnoperkaDialog } from "@/components/fish/KrasnoperkaDialog";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { SPECIES_COLORS, SPECIES_LABELS, type Species } from "@/lib/species";
 import { biteColor } from "@/lib/forecast";
@@ -32,6 +33,7 @@ import {
   HelpCircle,
   Sunrise,
   Sunset,
+  Fish,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -124,6 +126,7 @@ export function ForecastTab() {
   const [showAllHours, setShowAllHours] = useState(false);
   const [breakdownHour, setBreakdownHour] = useState<ForecastHour | null>(null);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
+  const [krasnoperkaOpen, setKrasnoperkaOpen] = useState(false);
 
   const forecastQ = useQuery<ForecastResponse>({
     queryKey: ["forecast", currentSpotId, targetSpecies],
@@ -244,13 +247,41 @@ export function ForecastTab() {
     });
   }, [expanded, showAllHours, targetSpecies]);
 
+  // Кнопка + диалог «Краснопёрка» — показываются во всех состояниях,
+  // т.к. прогноз по краснопёрке не зависит от выбранного места.
+  const krasnoperkaButton = (
+    <>
+      <Button
+        variant="outline"
+        size="icon"
+        className="h-11 w-11 shrink-0"
+        onClick={() => setKrasnoperkaOpen(true)}
+        title="Краснопёрка — прогноз хода"
+      >
+        <Fish className="h-4 w-4 text-red-600" />
+      </Button>
+      <KrasnoperkaDialog open={krasnoperkaOpen} onOpenChange={setKrasnoperkaOpen} />
+    </>
+  );
+
   if (spots.length === 0) {
-    return <EmptyState title="Нет мест" description="Добавьте место в настройках" />;
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <div className="flex-1" />
+          {krasnoperkaButton}
+        </div>
+        <EmptyState title="Нет мест" description="Добавьте место в настройках" />
+      </div>
+    );
   }
   if (!currentSpotId) {
     return (
       <div className="space-y-4">
-        <SpotSelector onAddSpot={() => useAppStore.getState().setSettingsOpen(true)} />
+        <div className="flex items-center gap-2">
+          <div className="flex-1"><SpotSelector onAddSpot={() => useAppStore.getState().setSettingsOpen(true)} /></div>
+          {krasnoperkaButton}
+        </div>
         <EmptyState title="Выберите место" description="Для отображения прогноза" />
       </div>
     );
@@ -258,7 +289,10 @@ export function ForecastTab() {
   if (forecastQ.isLoading) {
     return (
       <div className="space-y-4">
-        <SpotSelector onAddSpot={() => useAppStore.getState().setSettingsOpen(true)} />
+        <div className="flex items-center gap-2">
+          <div className="flex-1"><SpotSelector onAddSpot={() => useAppStore.getState().setSettingsOpen(true)} /></div>
+          {krasnoperkaButton}
+        </div>
         <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2">
           {Array.from({ length: 7 }).map((_, i) => <Skeleton key={i} className="h-44 w-40 shrink-0" />)}
         </div>
@@ -269,7 +303,10 @@ export function ForecastTab() {
   if (forecastQ.isError || !forecastQ.data) {
     return (
       <div className="space-y-4">
-        <SpotSelector onAddSpot={() => useAppStore.getState().setSettingsOpen(true)} />
+        <div className="flex items-center gap-2">
+          <div className="flex-1"><SpotSelector onAddSpot={() => useAppStore.getState().setSettingsOpen(true)} /></div>
+          {krasnoperkaButton}
+        </div>
         <EmptyState title="Ошибка загрузки прогноза" description={(forecastQ.error as Error)?.message} />
       </div>
     );
@@ -279,7 +316,10 @@ export function ForecastTab() {
 
   return (
     <div className="space-y-4">
-      <SpotSelector onAddSpot={() => useAppStore.getState().setSettingsOpen(true)} />
+      <div className="flex items-center gap-2">
+        <div className="flex-1"><SpotSelector onAddSpot={() => useAppStore.getState().setSettingsOpen(true)} /></div>
+        {krasnoperkaButton}
+      </div>
 
       {/* 7-day horizontal scroll */}
       <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2 -mx-1 px-1">

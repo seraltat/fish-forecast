@@ -60,7 +60,7 @@ export function SpotSelector({ onAddSpot, className, showAddButton = true }: Spo
         <SelectContent>
           {spots.map((s) => (
             <SelectItem key={s.id} value={s.id}>
-              {s.name} ({s.waterType === "river" ? "река" : "озеро"})
+              {s.name}{s.description ? ` (${s.description})` : ""}
             </SelectItem>
           ))}
         </SelectContent>

@@ -39,7 +39,7 @@ const PRESETS = [
   { name: "Артемовка", lat: 43.349914, lon: 132.309550, type: "river" },
   { name: "Кипарисовка", lat: 43.458300, lon: 131.902458, type: "river" },
   { name: "Илистая", lat: 44.388419, lon: 132.429022, type: "river" },
-  { name: "Канал", lat: 44.389803, lon: 132.417586, type: "river" },
+  { name: "Канал", lat: 44.389803, lon: 132.417586, type: "канал" },
 ];
 
 export function AddSpotDialog({ open, onOpenChange, initial }: AddSpotDialogProps) {
@@ -48,7 +48,7 @@ export function AddSpotDialog({ open, onOpenChange, initial }: AddSpotDialogProp
   const [name, setName] = useState(initial?.name ?? "");
   const [lat, setLat] = useState<string>(initial ? String(initial.latitude) : "");
   const [lon, setLon] = useState<string>(initial ? String(initial.longitude) : "");
-  const [waterType, setWaterType] = useState<string>(initial?.waterType ?? "lake");
+  const [waterType, setWaterType] = useState<string>(initial?.waterType ?? "river");
   const [description, setDescription] = useState<string>(initial?.description ?? "");
   const [mapOpen, setMapOpen] = useState(false);
 
@@ -80,7 +80,7 @@ export function AddSpotDialog({ open, onOpenChange, initial }: AddSpotDialogProp
       toast({ title: initial ? "Место обновлено" : "Место добавлено" });
       qc.invalidateQueries({ queryKey: ["spots"] });
       onOpenChange(false);
-      setName(""); setLat(""); setLon(""); setDescription(""); setWaterType("lake");
+      setName(""); setLat(""); setLon(""); setDescription(""); setWaterType("river");
     },
     onError: (e: Error) => {
       toast({ title: "Ошибка", description: e.message, variant: "destructive" });
@@ -150,6 +150,8 @@ export function AddSpotDialog({ open, onOpenChange, initial }: AddSpotDialogProp
               <SelectContent>
                 <SelectItem value="lake">Озеро</SelectItem>
                 <SelectItem value="river">Река</SelectItem>
+                <SelectItem value="протока">Протока</SelectItem>
+                <SelectItem value="канал">Канал</SelectItem>
               </SelectContent>
             </Select>
           </div>

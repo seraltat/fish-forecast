@@ -3,6 +3,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, type SpotDTO } from "@/lib/api";
+import { apiFetch } from "@/lib/user-id";
 import { useAppStore } from "@/store/app-store";
 import {
   Sheet,
@@ -13,7 +14,7 @@ import {
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Edit, Plus, Trash2, Settings, MapPin, Fish, Download } from "lucide-react";
+import { Edit, Plus, Trash2, Settings, MapPin, Fish, Download, Upload } from "lucide-react";
 import { AddSpotDialog } from "@/components/fish/AddSpotDialog";
 import { MapModal } from "@/components/fish/MapModal";
 import { ALL_SPECIES, SPECIES_LABELS } from "@/lib/species";
@@ -40,7 +41,7 @@ export function SettingsSheet() {
   const fishQ = useQuery<{ configs: Array<{ id: string; species: string; enabled: boolean }> }>({
     queryKey: ["fish-config"],
     queryFn: async () => {
-      const r = await fetch("/api/fish-config");
+      const r = await apiFetch("/api/fish-config");
       if (!r.ok) return { configs: [] };
       return r.json() as Promise<{ configs: Array<{ id: string; species: string; enabled: boolean }> }>;
     },
@@ -57,7 +58,7 @@ export function SettingsSheet() {
 
   const toggleFish = useMutation({
     mutationFn: async ({ id, enabled }: { id: string; enabled: boolean }) => {
-      const r = await fetch(`/api/fish-config/${id}`, {
+      const r = await apiFetch(`/api/fish-config/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled }),
@@ -99,7 +100,12 @@ export function SettingsSheet() {
                   <li key={s.id} className="rounded-lg border border-border p-2.5 bg-card">
                     <div className="text-sm font-medium truncate">{s.name}</div>
                     <div className="text-[10px] text-muted-foreground mb-1.5">
-                      {s.latitude.toFixed(4)}, {s.longitude.toFixed(4)} · {s.waterType === "river" ? "река" : "озеро"}
+                      {s.latitude.toFixed(4)}, {s.longitude.toFixed(4)} · {
+                        s.waterType === "river" ? "река" :
+                        s.waterType === "lake" ? "озеро" :
+                        s.waterType === "протока" ? "протока" :
+                        s.waterType === "канал" ? "канал" : s.waterType
+                      }
                     </div>
                     {/* Action buttons — Edit, Show on map, Delete */}
                     <div className="flex gap-1.5">
@@ -162,14 +168,14 @@ export function SettingsSheet() {
             )}
           </section>
 
-          {/* Экспорт данных */}
+          {/* Экспорт / Импорт данных */}
           <section className="space-y-2 pt-2 border-t">
             <Button
               variant="outline"
               className="w-full h-11"
               onClick={async () => {
                 try {
-                  const r = await fetch("/api/export");
+                  const r = await apiFetch("/api/export");
                   if (!r.ok) throw new Error("Не удалось выгрузить");
                   const blob = await r.blob();
                   const url = URL.createObjectURL(blob);
@@ -188,11 +194,51 @@ export function SettingsSheet() {
             >
               <Download className="h-4 w-4 mr-1" /> Экспорт данных в JSON
             </Button>
+
+            <Button
+              variant="outline"
+              className="w-full h-11"
+              onClick={() => {
+                const input = document.createElement("input");
+                input.type = "file";
+                input.accept = ".json,application/json";
+                input.onchange = async () => {
+                  if (!input.files?.[0]) return;
+                  try {
+                    const text = await input.files[0].text();
+                    const data = JSON.parse(text);
+                    const r = await apiFetch("/api/import", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify(data),
+                    });
+                    if (!r.ok) throw new Error("Не удалось импортировать");
+                    const result = await r.json();
+                    toast({ title: "Импорт завершён", description: result.message });
+                    qc.invalidateQueries({ queryKey: ["spots"] });
+                    qc.invalidateQueries({ queryKey: ["catches"] });
+                    qc.invalidateQueries({ queryKey: ["analytics"] });
+                    qc.invalidateQueries({ queryKey: ["fish-config"] });
+                    qc.invalidateQueries({ queryKey: ["forecast"] });
+                  } catch (e) {
+                    toast({ title: "Ошибка импорта", description: (e as Error).message, variant: "destructive" });
+                  }
+                };
+                input.click();
+              }}
+            >
+              <Upload className="h-4 w-4 mr-1" /> Импорт из JSON
+            </Button>
           </section>
         </div>
       </SheetContent>
 
-      <AddSpotDialog open={addSpotOpen} onOpenChange={setAddSpotOpen} initial={editSpot ?? undefined} />
+      <AddSpotDialog
+        key={editSpot?.id ?? "new-spot"}
+        open={addSpotOpen}
+        onOpenChange={setAddSpotOpen}
+        initial={editSpot ?? undefined}
+      />
 
       {/* Read-only map view — opens when user taps "На карте" on a spot row. */}
       <MapModal
