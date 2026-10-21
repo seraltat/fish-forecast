@@ -58,11 +58,16 @@ function fetchSSTAt(lat: number, lon: number): Promise<number | null> {
 }
 
 // Migration readiness based on SST. SST is in °C.
-// > 12°C → "early" — redfins still in sea, not migrating yet
-// 8-12°C → "ready" — autumn migration in progress, redfins entering rivers
-// < 8°C  → "winter" — redfins already in wintering holes in rivers
+// Пороги уточнены по реальной практике: краснопёрка начинает заход в реки
+// уже при 11-16°C (по тихой, в устьях и протоках), а не только при 8-10°C.
+// Массовый ход — при 7-11°C, далее скатывание на ямы и собственно зимовка.
+//   > 16°C → "early"    — ещё в море, ход не начался
+//   11-16°C → "starting" — начинается заход, можно ловить в устьях
+//   7-11°C → "ready"    — активный массовый ход
+//   4-7°C → "fading"    — скатывание на зимовальные ямы
+//   < 4°C → "winter"    — на зимовальных ямах
 function migrationStatus(sst: number | null): {
-  status: "early" | "ready" | "winter" | "unknown";
+  status: "early" | "starting" | "ready" | "fading" | "winter" | "unknown";
   label: string;
   description: string;
 } {
@@ -73,24 +78,38 @@ function migrationStatus(sst: number | null): {
       description: "Не удалось получить SST — проверьте интернет на сервере",
     };
   }
-  if (sst > 12) {
+  if (sst > 16) {
     return {
       status: "early",
       label: "Рано",
-      description: `Морская вода ${sst}°C — слишком тёплая. Краснопёрка ещё в море`,
+      description: `Морская вода ${sst}°C — краснопёрка ещё в море, ход не начался`,
     };
   }
-  if (sst >= 8) {
+  if (sst >= 11) {
+    return {
+      status: "starting",
+      label: "Начинается заход",
+      description: `Морская вода ${sst}°C — краснопёрка начинает заход в реки. Можно ловить в устьях и протоках`,
+    };
+  }
+  if (sst >= 7) {
     return {
       status: "ready",
-      label: "Готова идти!",
-      description: `Морская вода остыла до ${sst}°C — краснопёрка массово заходит в реки и протоки`,
+      label: "Активный ход!",
+      description: `Морская вода остыла до ${sst}°C — краснопёрка массово заходит в реки. Лучшее время!`,
+    };
+  }
+  if (sst >= 4) {
+    return {
+      status: "fading",
+      label: "Скаты на ямы",
+      description: `Морская вода ${sst}°C — краснопёрка заходит на зимовальные ямы в реках`,
     };
   }
   return {
     status: "winter",
     label: "На зимовальных ямах",
-    description: `Морская вода ${sst}°C — краснопёрка уже залегла в зимовальные ямы в реках`,
+    description: `Морская вода ${sst}°C — краснопёрка залегла в зимовальные ямы в реках`,
   };
 }
 
@@ -115,20 +134,26 @@ export async function GET() {
     })
   );
 
-  // Overall status: ready if ANY bay is ready (redfins can be in rivers flowing into that bay).
-  // winter takes precedence over ready (if any bay shows winter, that's the global state).
-  // unknown if all are unknown.
+  // Overall status precedence: ready > starting > fading > winter > early > unknown
+  // (если любой залив в "ready" — глобально "ready", даже если другой залив "early")
+  const STATUS_PRIORITY: Record<string, number> = {
+    ready: 4, starting: 3, fading: 2, winter: 1, early: 0, unknown: -1,
+  };
   const statuses = bays.map((b) => b.status);
-  let overall: "early" | "ready" | "winter" | "unknown";
+  let overall: "early" | "starting" | "ready" | "fading" | "winter" | "unknown";
   if (statuses.every((s) => s === "unknown")) overall = "unknown";
-  else if (statuses.includes("winter")) overall = "winter";
-  else if (statuses.includes("ready")) overall = "ready";
-  else overall = "early";
+  else {
+    overall = statuses.reduce((max, s) =>
+      (STATUS_PRIORITY[s] ?? -1) > (STATUS_PRIORITY[max] ?? -1) ? s : max,
+    statuses[0] as typeof overall);
+  }
 
   const overallLabels: Record<typeof overall, string> = {
     early: "Рано — краснопёрка ещё в море",
-    ready: "Готова идти в реки!",
-    winter: "Уже на зимовальных ямах",
+    starting: "Начинается заход в реки",
+    ready: "Активный ход — краснопёрка идёт в реки!",
+    fading: "Скаты на зимовальные ямы",
+    winter: "На зимовальных ямах",
     unknown: "Нет данных о SST",
   };
 

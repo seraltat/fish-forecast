@@ -27,7 +27,7 @@ import {
   windSpeedScore,
 } from "@/lib/forecast";
 import type { ForecastHour } from "@/lib/types";
-import { AlertTriangle, Thermometer } from "lucide-react";
+import { AlertTriangle, Thermometer, Fish } from "lucide-react";
 
 // Re-export for callers that need to construct HourInput.
 export type { HourInput };
@@ -76,6 +76,172 @@ function hourToInput(hour: ForecastHour): HourInput {
     moonPhaseValue: hour.moonPhase,
     lunarDay: hour.lunarDay,
     month,
+  };
+}
+
+interface FishingTips {
+  depth: string;       // где искать (глубина/мелководье)
+  bait: string;         // рекомендуемые насадки
+  timeOfDay: string;   // лучшее время суток
+  gear: string;        // снасти
+  note?: string;       // дополнительные нюансы
+}
+
+// Рекомендации по лову на основе статей о карасе (для других видов — пусто).
+// Используется в диалоге "Почему?" — помогает рыбаку понять не только оценку,
+// но и КАК ловить в текущих условиях.
+function getFishingTips(species: Species, hour: ForecastHour): FishingTips | null {
+  if (species !== "карась") return null; // пока только для карася
+
+  const wt = hour.waterTemp;
+  // Месяц из времени часа (UTC)
+  const month = new Date(hour.time + ":00Z").getUTCMonth() + 1;
+  const isNight = hour.isNight;
+
+  // Зима (декабрь-февраль)
+  if (month === 12 || month === 1 || month === 2) {
+    if (wt < 4) {
+      return {
+        depth: "Глубокие ямы с ракушечным или глиняным дном, коряжник, устья, родники",
+        bait: "Мотыль (мормышка 3-5 г)",
+        timeOfDay: "11-15 ч, в оттепель",
+        gear: "Зимняя удочка с боковым кивком",
+        note: "Глухозимье — карась едва активен. Ловят только в оттепель и в правильных местах",
+      };
+    }
+    // По первому льду / зимняя пассивность
+    return {
+      depth: "Глубокие ямы с ракушечным дном, коряжник на глубине, устья, родники",
+      bait: "Мотыль (мормышка 3-5 г)",
+      timeOfDay: "11-15 ч, в оттепель",
+      gear: "Зимняя удочка с боковым кивком или поплавочная",
+      note: "По первому льду — ещё на глубине до 3 м. В оттепель клюёт лучше",
+    };
+  }
+
+  // Весна (март-май) — преднерестовый жор
+  if (month >= 3 && month <= 5) {
+    if (wt >= 15 && wt < 20) {
+      // Нерест
+      return {
+        depth: "Мелководье (15-35 см) — нерестилища",
+        bait: "Не клюёт — карась мечет икру",
+        timeOfDay: "—",
+        gear: "—",
+        note: "Через 7-10 дней начнётся посленерестовый жор",
+      };
+    }
+    if (wt >= 4 && wt < 12) {
+      return {
+        depth: "Мелководье: защищённые от ветра заводи, илистое/глиняное дно, ямы и бугры, коряги, граница растительности",
+        bait: "Червь, опарыш, мотыль (можно бутерброд)",
+        timeOfDay: "10-17 ч (солнце прогревает воду)",
+        gear: "Поплавочная удочка (маховая, болонская), фидер",
+        note: "Карась отходит от спячки и жадно питается — неприхотлив к насадкам",
+      };
+    }
+    if (wt >= 12 && wt < 15) {
+      return {
+        depth: "Мелководье у берега, отмели рядом с ямами, устья ручьёв",
+        bait: "Червь, опарыш, перловка, кукуруза — карась неприхотлив",
+        timeOfDay: "10-17 ч (солнечные дни)",
+        gear: "Поплавочная удочка, фидер",
+        note: "Пик весеннего жора — лучшее время для ловли карася",
+      };
+    }
+  }
+
+  // Нерест и посленерестовый жор (май-июль)
+  if (month >= 5 && month <= 7) {
+    if (wt >= 15 && wt < 20) {
+      return {
+        depth: "Мелководье (15-35 см) — нерестилища",
+        bait: "Не клюёт — карась мечет икру",
+        timeOfDay: "—",
+        gear: "—",
+        note: "Через 7-10 дней начнётся посленерестовый жор",
+      };
+    }
+    if (wt >= 20 && wt <= 25) {
+      return {
+        depth: "Уходит чуть дальше на глубину, пиха в затопленных кустах и коряжнике",
+        bait: "Червь, опарыш, перловка с кукурузой, тесто",
+        timeOfDay: "4-8 утра и перед закатом (в жару — ночь)",
+        gear: "Поплавочная удочка, фидер, матчевая снасть",
+        note: "Посленерестовый жор — пик активности! Лучшее время для ловли",
+      };
+    }
+  }
+
+  // Лето (июнь-август)
+  if (month >= 6 && month <= 8) {
+    if (wt > 25) {
+      // Жара
+      return {
+        depth: "Глубина, бровки, к ключам и родникам — там кислород",
+        bait: "Утром — животные (червь, опарыш), днём — растительные (кукуруза, перловка)",
+        timeOfDay: "4-8 утра и перед закатом — в жару карась вялый",
+        gear: "Фидер на глубине, поплавочная удочка утром/вечером",
+        note: "Жара — кислород падает. Карась меняет место 3-4 раза за день",
+      };
+    }
+    // Нормальное лето (18-25°C)
+    return {
+      depth: isNight
+        ? "Ближе к берегу, в камышах и рогозе, чистые «окна» в растительности"
+        : "Глубина, перепады глубин, бровки, затопленные сооружения, илистые свалы",
+      bait: "Растительные с ароматизаторами: чеснок, анис, конопля, ваниль, шоколад. Крупные частицы — перловка, кукуруза, горох",
+      timeOfDay: "4-8 утра (пик), перед закатом, ночь (крупные особи)",
+      gear: "Поплавочная удочка у берега, фидер на дальних дистанциях, матчевая на течении",
+      note: "Летом карась становится «вегетарианцем». Меняет место 3-4 раза за день",
+    };
+  }
+
+  // Осень (сен-ноя)
+  if (month >= 9 && month <= 11) {
+    if (wt < 4) {
+      return {
+        depth: "Глубокие ямы с твёрдым дном (глина, песок, ракушка)",
+        bait: "Мотыль",
+        timeOfDay: "11-15 ч, в тёплый день",
+        gear: "Зимняя удочка с мормышкой",
+        note: "Близко к спячке — клюёт редко, только в оттепель",
+      };
+    }
+    if (wt < 8) {
+      return {
+        depth: "Бровки, ямы с твёрдым дном, устья впадающих рек, коряжник на глубине",
+        bait: "Животные: мотыль, навозный червь, опарыш, личинка репейника",
+        timeOfDay: "11-16 ч, пик в обед",
+        gear: "Фидер (3.5-4.2 м, дальние забросы), матчевая снасть",
+        note: "Сезон заканчивается — карась на глубине, но клюёт. Избегать мелководья <1.5 м",
+      };
+    }
+    if (wt < 12) {
+      return {
+        depth: "Бровки рядом со свалами на глубину, ямы с твёрдым дном, устья впадающих рек",
+        bait: "Животные: мотыль, червь, опарыш, бутерброд из мотыля и опарыша",
+        timeOfDay: "12-16 ч (обед)",
+        gear: "Фидер (длинное удилище 3.5-4.2 м), матчевая для точечных забросов",
+        note: "Осенний жор — карась активно кормится, накапливая жир к зиме. Стаи и глубина",
+      };
+    }
+    // > 12°C осенью — ещё по-летнему
+    return {
+      depth: "Бровки, перепады глубин, устья рек, затопленные сооружения",
+      bait: "Смешанные: растительные + животные, экспериментировать",
+      timeOfDay: "12-17 ч",
+      gear: "Поплавочная удочка, фидер",
+      note: "Тёплая осень — карась ещё по-летнему активен",
+    };
+  }
+
+  // Fallback (не должно сработать, но на всякий)
+  return {
+    depth: "Различные глубины и рельеф дна",
+    bait: "Червь, опарыш, перловка, кукуруза",
+    timeOfDay: "Утро и вечер",
+    gear: "Поплавочная удочка, фидер",
   };
 }
 
@@ -353,6 +519,7 @@ export function ScoreBreakdownDialog({
   const finalScore = hour?.scores?.[species] ?? 0;
   const color = biteColor(finalScore);
   const topFactorsList = hour?.topFactors?.[species] ?? [];
+  const fishingTips = hour ? getFishingTips(species, hour) : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -380,6 +547,38 @@ export function ScoreBreakdownDialog({
                 {seasonMult !== 1.0 && (
                   <div className="text-xs">Множитель сезона: ×{seasonMult.toFixed(2)}</div>
                 )}
+              </div>
+            )}
+
+            {/* Fishing tips — рекомендации по лову (пока только для карася) */}
+            {fishingTips && (
+              <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 space-y-2">
+                <div className="text-xs font-medium text-primary uppercase flex items-center gap-1.5">
+                  <Fish className="h-3.5 w-3.5" /> Рекомендации по лову
+                </div>
+                <div className="space-y-1.5 text-xs">
+                  <div className="flex gap-2">
+                    <span className="text-muted-foreground shrink-0 w-16">Глубина:</span>
+                    <span className="text-foreground">{fishingTips.depth}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <span className="text-muted-foreground shrink-0 w-16">Насадка:</span>
+                    <span className="text-foreground">{fishingTips.bait}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <span className="text-muted-foreground shrink-0 w-16">Время:</span>
+                    <span className="text-foreground">{fishingTips.timeOfDay}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <span className="text-muted-foreground shrink-0 w-16">Снасти:</span>
+                    <span className="text-foreground">{fishingTips.gear}</span>
+                  </div>
+                  {fishingTips.note && (
+                    <div className="pt-1.5 mt-1.5 border-t border-primary/20 text-muted-foreground italic">
+                      {fishingTips.note}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 

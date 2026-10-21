@@ -628,71 +628,114 @@ export function getSeasonStatus(species: Species, month: number, waterTemp: numb
   }
 
   // species === "карась"
-  // Cooling: fall 10-12°C (Sep-Nov) — checked BEFORE generic <12 warming
-  // so that autumn cooling-down period is reported correctly, not "warming".
-  if (waterTemp >= 10 && waterTemp < 12 && (month >= 9 && month <= 11)) {
+  // Сезонная логика по статьям о карасе (обобщённая практика рыболовов ДВ):
+  //   < 4°C  — глухозимье (только в оттепель, в глубоких ямах)
+  //   4-8°C  — пассивен, но клюёт (зимой и поздней осенью)
+  //   8-12°C — осенний/весенний жор (активно питается)
+  //   12-15°C — пик активности (преднерестовый жор / осеннее накопление)
+  //   15-20°C — нерест в мае-июле; активный жор в другие месяцы
+  //   20-25°C — посленерестовый жор в мае-июле; летняя активность
+  //   > 25°C  — жара, кислород падает, уходит на глубину
+
+  // По первому льду (декабрь), вода 4-10°C — ещё активен (проверяем ПЕРВЫМ, до общей зимней пассивности)
+  if (month === 12 && waterTemp >= 4 && waterTemp < 10) {
     return {
-      status: "cooling",
-      label: "Сезон заканчивается",
-      description: `Вода ${waterTemp.toFixed(1)}°C — карась уходит в ямы на глубину 2-3 м. Скоро уйдёт в спячку`
+      status: "active",
+      label: "По первому льду",
+      description: `Вода ${waterTemp.toFixed(1)}°C — карась ещё активен на глубине до 3 м. Лучшее время: 11-15 ч, в оттепель`
     };
   }
-  // Below 4°C: hibernation any month
-  if (waterTemp < 4) {
+
+  // Глухозимье (декабрь-февраль), вода < 4°C — карась в спячке
+  if ((month === 12 || month === 1 || month === 2) && waterTemp < 4) {
     return {
       status: "off_season",
-      label: "Спячка",
-      description: `Вода ${waterTemp.toFixed(1)}°C — карась впадает в спячку, зарывшись в ил`
+      label: "Глухозимье",
+      description: `Вода ${waterTemp.toFixed(1)}°C — карась в зимовальных ямах, едва активен. В оттепель — мотыль, глубокие ямы с ракушечным дном`
     };
   }
-  // Off-season: water < 10°C in fall (Sep-Nov) or winter — fish already passive
-  if (waterTemp < 10 && (month >= 9 || month <= 4)) {
+
+  // Зимняя пассивность (январь-февраль), вода 4-10°C — пассивен, но клюёт
+  if ((month === 1 || month === 2) && waterTemp >= 4 && waterTemp < 10) {
     return {
       status: "off_season",
-      label: "Не сезон",
-      description: `Вода ${waterTemp.toFixed(1)}°C — карась пассивен`
+      label: "Зимняя пассивность",
+      description: `Вода ${waterTemp.toFixed(1)}°C — карась пассивен, но клюёт в оттепель. Глубокие ямы с ракушечным дном, мотыль, 11-15 ч`
     };
   }
-  // Water < 12°C: warming (typical May spring)
-  if (waterTemp < 12) {
-    return {
-      status: "warming",
-      label: "Вода прогревается",
-      description: `Вода ${waterTemp.toFixed(1)}°C — ждём прогрева до 12-15°C для начала активности карася`
-    };
-  }
-  // Pre-spawn: 12-14°C in May-July
-  if (waterTemp >= 12 && waterTemp < 14 && (month >= 5 && month <= 7)) {
+
+  // Весна (март-май), вода 4-12°C — преднерестовый жор
+  if ((month >= 3 && month <= 5) && waterTemp >= 4 && waterTemp < 12) {
     return {
       status: "pre_spawn",
-      label: "Приближается нерест",
-      description: `Вода ${waterTemp.toFixed(1)}°C — скоро нерест карася (при 14-15°C). Преднерестовый жор — хороший клёв!`
+      label: "Весенний жор!",
+      description: `Вода ${waterTemp.toFixed(1)}°C — карась отошёл от спячки, жадно питается на мелководье. Лучшее время: 10-17 ч, солнечные дни`
     };
   }
-  // Spawning: 14-16°C in May-July
-  if (waterTemp >= 14 && waterTemp <= 16 && (month >= 5 && month <= 7)) {
+
+  // Весна (март-май), вода 12-15°C — пик весеннего жора
+  if ((month >= 3 && month <= 5) && waterTemp >= 12 && waterTemp < 15) {
+    return {
+      status: "pre_spawn",
+      label: "Весенний жор!",
+      description: `Вода ${waterTemp.toFixed(1)}°C — пик весеннего жора. Карась неприхотлив к насадкам, на мелководье и у берега`
+    };
+  }
+
+  // Нерест (май-июль), вода 15-20°C
+  if ((month >= 5 && month <= 7) && waterTemp >= 15 && waterTemp < 20) {
     return {
       status: "spawning",
       label: "Нерест",
-      description: `Вода ${waterTemp.toFixed(1)}°C — карась мечет икру. Клёв прекращён. Через 7-10 дней начнётся посленерестовый жор`
+      description: `Вода ${waterTemp.toFixed(1)}°C — карась мечет икру на мелководье. Клёв прекращён. Через 7-10 дней — посленерестовый жор`
     };
   }
-  // Post-spawn: 17-20°C in May-July (right after spawn)
-  if (waterTemp > 16 && waterTemp <= 20 && (month >= 5 && month <= 7)) {
+
+  // Посленерестовый жор (май-июль), вода 20-25°C
+  if ((month >= 5 && month <= 7) && waterTemp >= 20 && waterTemp <= 25) {
     return {
       status: "post_spawn",
       label: "Посленерестовый жор!",
       description: `Вода ${waterTemp.toFixed(1)}°C — карась отнерестился и активно кормится. Лучшее время для ловли!`
     };
   }
-  // Too hot: > 25°C in summer
-  if (waterTemp > 25 && (month >= 6 && month <= 8)) {
+
+  // Летняя жара (июнь-август), вода > 25°C
+  if ((month >= 6 && month <= 8) && waterTemp > 25) {
     return {
       status: "too_hot",
       label: "Жара — кислород падает",
-      description: `Вода ${waterTemp.toFixed(1)}°C — кислород снижается, карась вялый, уходит на глубину или к ключам. Лучше ловить утром и вечером`
+      description: `Вода ${waterTemp.toFixed(1)}°C — кислород снижается, карась вялый. Уходит на глубину или к ключам. Лучше ловить утром (4-8) и вечером`
     };
   }
+
+  // Осень (сен-ноя), вода < 4°C — близко к спячке
+  if ((month >= 9 && month <= 11) && waterTemp < 4) {
+    return {
+      status: "off_season",
+      label: "Близко к спячке",
+      description: `Вода ${waterTemp.toFixed(1)}°C — карась почти в спячке. Можно поймать в тёплый день на мотыля`
+    };
+  }
+
+  // Осень (сен-ноя), вода 4-8°C — сезон заканчивается, но клюёт
+  if ((month >= 9 && month <= 11) && waterTemp >= 4 && waterTemp < 8) {
+    return {
+      status: "cooling",
+      label: "Сезон заканчивается",
+      description: `Вода ${waterTemp.toFixed(1)}°C — карась на глубинных ямах и бровках, но клюёт. Фидер, матчевая снасть, животные насадки. Лучшее время: 12-16 ч`
+    };
+  }
+
+  // Осень (сен-ноя), вода 8-12°C — осенний жор
+  if ((month >= 9 && month <= 11) && waterTemp >= 8 && waterTemp < 12) {
+    return {
+      status: "cooling",
+      label: "Осенний жор",
+      description: `Вода ${waterTemp.toFixed(1)}°C — карась активно кормится, накапливая жир. На бровках и устьях рек. Животные насадки: мотыль, червь, опарыш. Лучшее время: 12-16 ч`
+    };
+  }
+
   return { status: "active", label: "Активно", description: `Вода ${waterTemp.toFixed(1)}°C — карась активно кормится` };
 }
 

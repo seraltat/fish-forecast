@@ -20,15 +20,19 @@ interface KrasnoperkaDialogProps {
 
 const STATUS_COLORS: Record<string, string> = {
   ready: "text-emerald-600 bg-emerald-50 border-emerald-200",
-  early: "text-amber-600 bg-amber-50 border-amber-200",
-  winter: "text-blue-600 bg-blue-50 border-blue-200",
+  starting: "text-amber-600 bg-amber-50 border-amber-200",
+  fading: "text-blue-600 bg-blue-50 border-blue-200",
+  winter: "text-indigo-600 bg-indigo-50 border-indigo-200",
+  early: "text-orange-600 bg-orange-50 border-orange-200",
   unknown: "text-muted-foreground bg-muted border-border",
 };
 
 const OVERALL_BANNER: Record<string, string> = {
   ready: "bg-emerald-600 text-white",
-  early: "bg-amber-500 text-white",
-  winter: "bg-blue-600 text-white",
+  starting: "bg-amber-500 text-white",
+  fading: "bg-blue-600 text-white",
+  winter: "bg-indigo-600 text-white",
+  early: "bg-orange-500 text-white",
   unknown: "bg-muted text-muted-foreground",
 };
 

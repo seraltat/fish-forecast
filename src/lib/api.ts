@@ -114,18 +114,18 @@ export const api = {
     remove: (id: string) => apiDelete<{ ok: boolean }>(`/spots/${id}`),
   },
   // Краснопёрка — отдельный прогноз (не привязан к месту). Возвращает SST по заливам
-  // и статус миграции ("early" / "ready" / "winter").
+  // и статус миграции ("early" / "starting" / "ready" / "fading" / "winter" / "unknown").
   krasnoperka: () => apiGet<{
     bays: {
       name: string;
       latitude: number;
       longitude: number;
       sst: number | null;
-      status: "early" | "ready" | "winter" | "unknown";
+      status: "early" | "starting" | "ready" | "fading" | "winter" | "unknown";
       label: string;
       description: string;
     }[];
-    overall: "early" | "ready" | "winter" | "unknown";
+    overall: "early" | "starting" | "ready" | "fading" | "winter" | "unknown";
     overallLabel: string;
     fetchedAt: string;
   }>("/krasnoperka"),
