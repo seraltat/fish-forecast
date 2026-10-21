@@ -357,8 +357,8 @@ export async function POST(req: Request) {
         factors[sp] = [];
         seasonStatusMap[sp] = {
           status: "off_season",
-          label: "См. вкладку «Прогноз» 🐟",
-          description: "Прогноз по краснопёрке — нажмите кнопку с красной рыбкой в правом верхнем углу вкладки «Прогноз»",
+          label: "См. вкладку «Прогноз»",
+          description: "Прогноз по краснопёрке — нажмите красную иконку рыбы в правом верхнем углу вкладки «Прогноз»",
         };
         continue;
       }
