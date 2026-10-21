@@ -21,6 +21,10 @@ export const metadata: Metadata = {
   title: "Прогноз клёва",
   description: "Персональный прогноз клёва с поправками на месте для рыбака",
   applicationName: "Прогноз клёва",
+  authors: [{ name: "Резниченко Сергей Иванович", url: "mailto:rezseriv@gmail.com" }],
+  creator: "Резниченко Сергей Иванович",
+  publisher: "Резниченко Сергей Иванович",
+  copyright: "© 2026 Резниченко С. И.",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,

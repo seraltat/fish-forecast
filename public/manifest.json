@@ -2,6 +2,7 @@
   "name": "Прогноз клёва",
   "short_name": "Клёв",
   "description": "Персональный прогноз клёва с поправками на месте",
+  "author": "Резниченко Сергей Иванович <rezseriv@gmail.com>",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

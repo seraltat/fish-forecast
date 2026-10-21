@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Edit, Plus, Trash2, Settings, MapPin, Fish, Download, Upload } from "lucide-react";
+import { Edit, Plus, Trash2, Settings, MapPin, Fish, Download, Upload, Mail, User } from "lucide-react";
 import { AddSpotDialog } from "@/components/fish/AddSpotDialog";
 import { MapModal } from "@/components/fish/MapModal";
 import { ALL_SPECIES, SPECIES_LABELS } from "@/lib/species";
@@ -229,6 +229,35 @@ export function SettingsSheet() {
             >
               <Upload className="h-4 w-4 mr-1" /> Импорт из JSON
             </Button>
+          </section>
+
+          {/* About — подпись автора */}
+          <section className="space-y-2 pt-3 border-t">
+            <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
+              <div className="text-[10px] text-muted-foreground uppercase tracking-wide">О приложении</div>
+              <div className="text-sm font-semibold">Прогноз клёва 🎣</div>
+              <div className="text-[11px] text-muted-foreground leading-snug">
+                Персональное приложение для прогноза клёва рыбы на Дальнем Востоке России
+              </div>
+              <div className="pt-2 space-y-1 text-xs">
+                <div className="flex items-center gap-1.5 text-muted-foreground">
+                  <User className="h-3 w-3" />
+                  <span>Автор: <span className="text-foreground font-medium">Резниченко Сергей Иванович</span></span>
+                </div>
+                <div className="flex items-center gap-1.5 text-muted-foreground">
+                  <Mail className="h-3 w-3" />
+                  <a
+                    href="mailto:rezseriv@gmail.com"
+                    className="text-foreground hover:text-primary transition-colors underline-offset-2 hover:underline"
+                  >
+                    rezseriv@gmail.com
+                  </a>
+                </div>
+              </div>
+              <div className="pt-2 border-t border-border/50 text-[10px] text-muted-foreground">
+                © {new Date().getFullYear()} Резниченко С. И. Все права защищены
+              </div>
+            </div>
           </section>
         </div>
       </SheetContent>
